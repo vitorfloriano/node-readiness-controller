@@ -2,7 +2,7 @@ name: Lint GitHub Actions Workflows
 on:
   pull_request:
     paths: 
-     - '.github/workflows/*.yml'
+     - '.github/workflows/*.{yml,yaml}'
 
 permissions: {}
 
