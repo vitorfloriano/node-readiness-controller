@@ -1,10 +1,6 @@
 blank_issues_enabled: true
 
-contact_links:
-  - name: Report a Vulnerability
-    url: https://github.com/kubernetes-sigs/node-readiness-controller/security
-    about: Please strictly report security vulnerabilities here rather than opening a public issue.
-  
+contact_links:  
   - name: Support & Discussions
     url: https://github.com/kubernetes-sigs/node-readiness-controller/discussions
     about: If you need help with configuration, have questions, or want to propose an idea, start here.
