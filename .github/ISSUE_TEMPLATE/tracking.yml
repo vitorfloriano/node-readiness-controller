@@ -21,7 +21,7 @@ body:
     attributes:
       label: Checklist / Sub-tasks
       description: List the required steps, sub-tasks, or related issues/PRs needed to complete this initiative. Use markdown checkboxes.
-      value: |
+      placeholder: |
         - [ ] Design and architecture (Link KEP or PR)
         - [ ] Implementation phase 1: [...]
         - [ ] Implementation phase 2: [...]
@@ -43,6 +43,6 @@ body:
     attributes:
       label: Target Milestone / Release
       description: Which upcoming release is this work targeted for?
-      placeholder: "v0.2.0 or Next"
+      placeholder: vX.Y.Z or Next
     validations:
       required: false
