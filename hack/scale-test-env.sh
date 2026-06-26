@@ -82,7 +82,8 @@ function start_cluster() {
             --name "${CLUSTER_NAME}" \
             --runtime binary \
             --node-lease-duration-seconds 400 \
-            --disable-qps-limits
+            --disable-qps-limits \
+            --enable-crds Stage
     fi
 
     # Dynamically retrieve the cluster kubeconfig
