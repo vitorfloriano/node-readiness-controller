@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -156,7 +157,12 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 	})
 
 	It("should reconcile scaled nodes, remove taints, and meet SLOs", func() {
-		nodeCount := 10 // scale test size (start small for skeleton validation)
+		nodeCount := 10 // default scale test size (start small for baseline validation)
+		if val, ok := os.LookupEnv("SCALE_NODES_COUNT"); ok {
+			if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+				nodeCount = parsed
+			}
+		}
 		totalExpectedNodes := nodeCount + 1
 
 		// Create NodeReadinessRule
