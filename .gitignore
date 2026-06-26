@@ -38,3 +38,7 @@ hack/test-workloads/ignore-pending/*
 CLAUDE.md
 GEMINI.md
 
+# Scale test artifacts
+test/e2e/scale/artifacts/
+
+

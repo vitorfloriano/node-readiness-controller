@@ -20,8 +20,10 @@ limitations under the License.
 package scale
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -250,8 +252,8 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 			}
 		}, "30s", "1s").Should(Succeed())
 
-		By("scraping metrics from the controller manager")
-		metricFamilies, err := scrapeMetrics()
+		By("scraping and saving metrics from the controller manager")
+		metricFamilies, err := scrapeAndSaveMetrics(filepath.Join(projectDir, "test/e2e/scale/artifacts"))
 		Expect(err).NotTo(HaveOccurred(), "Failed to scrape controller metrics")
 
 		// Verify Correctness: Taint Adds == Taint Removes == Node Count
@@ -279,7 +281,7 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 	})
 })
 
-func scrapeMetrics() (map[string]*dto.MetricFamily, error) {
+func scrapeAndSaveMetrics(artifactsDir string) (map[string]*dto.MetricFamily, error) {
 	resp, err := http.Get("http://localhost:8080/metrics")
 	if err != nil {
 		return nil, err
@@ -290,8 +292,22 @@ func scrapeMetrics() (map[string]*dto.MetricFamily, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create artifacts directory: %w", err)
+	}
+
+	promFilePath := filepath.Join(artifactsDir, "scale-test.prom")
+	if err := os.WriteFile(promFilePath, bodyBytes, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write metrics file: %w", err)
+	}
+
 	var parser expfmt.TextParser
-	metricFamilies, err := parser.TextToMetricFamilies(resp.Body)
+	metricFamilies, err := parser.TextToMetricFamilies(bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
