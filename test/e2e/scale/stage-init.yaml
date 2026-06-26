@@ -1,0 +1,27 @@
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: node-initialize-custom-readiness
+spec:
+  resourceRef:
+    apiGroup: ""
+    kind: Node
+  selector:
+    matchLabels:
+      type: kwok
+    matchExpressions:
+      - key: '.status.conditions.[] | select( .type == "custom/Ready" ) | .status'
+        operator: NotIn
+        values:
+          - "True"
+          - "False"
+  next:
+    statusTemplate: |
+      {{- $now := Now }}
+      conditions:
+        - lastHeartbeatTime: {{ $now | Quote }}
+          lastTransitionTime: {{ $now | Quote }}
+          message: "Custom CNI is not ready yet"
+          reason: "CNINotReady"
+          status: "False"
+          type: custom/Ready
