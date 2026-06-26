@@ -156,14 +156,20 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 		_ = k8sClient.Delete(context.Background(), baseNode)
 	})
 
-	It("should reconcile scaled nodes, remove taints, and meet SLOs", func() {
-		nodeCount := 10 // default scale test size (start small for baseline validation)
-		if val, ok := os.LookupEnv("SCALE_NODES_COUNT"); ok {
-			if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-				nodeCount = parsed
-			}
+	var sizes []int
+	if val, ok := os.LookupEnv("SCALE_NODES_COUNT"); ok {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			sizes = []int{parsed}
 		}
-		totalExpectedNodes := nodeCount + 1
+	} else {
+		// Run scaling test matrix dynamically from 10 to 100 to 500 to 1000 nodes
+		sizes = []int{10, 100, 500, 1000}
+	}
+
+	for _, size := range sizes {
+		nodeCount := size
+		It(fmt.Sprintf("should reconcile scaled nodes, remove taints, and meet SLOs for %d nodes", nodeCount), func() {
+			totalExpectedNodes := nodeCount + 1
 
 		// Create NodeReadinessRule
 		By("creating NodeReadinessRule")
@@ -259,7 +265,10 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 		}, "30s", "1s").Should(Succeed())
 
 		By("scraping and saving metrics from the controller manager")
-		metricFamilies, err := scrapeAndSaveMetrics(filepath.Join(projectDir, "test/e2e/scale/artifacts"))
+		metricFamilies, err := scrapeAndSaveMetrics(
+			filepath.Join(projectDir, "test/e2e/scale/artifacts"),
+			fmt.Sprintf("scale-%d.prom", nodeCount),
+		)
 		Expect(err).NotTo(HaveOccurred(), "Failed to scrape controller metrics")
 
 		// Verify Correctness: Taint Adds == Taint Removes == Node Count
@@ -284,10 +293,11 @@ var _ = Describe("Node Readiness Controller Scale Tests", func() {
 		By("verifying performance SLOs")
 		p99Ok := verifyEvaluationDurationSLO(metricFamilies, 0.05, 0.99)
 		Expect(p99Ok).To(BeTrue(), "p99 of evaluation duration must be less than 50ms")
-	})
+		})
+	}
 })
 
-func scrapeAndSaveMetrics(artifactsDir string) (map[string]*dto.MetricFamily, error) {
+func scrapeAndSaveMetrics(artifactsDir string, filename string) (map[string]*dto.MetricFamily, error) {
 	resp, err := http.Get("http://localhost:8080/metrics")
 	if err != nil {
 		return nil, err
@@ -307,7 +317,7 @@ func scrapeAndSaveMetrics(artifactsDir string) (map[string]*dto.MetricFamily, er
 		return nil, fmt.Errorf("failed to create artifacts directory: %w", err)
 	}
 
-	promFilePath := filepath.Join(artifactsDir, "scale-test.prom")
+	promFilePath := filepath.Join(artifactsDir, filename)
 	if err := os.WriteFile(promFilePath, bodyBytes, 0644); err != nil {
 		return nil, fmt.Errorf("failed to write metrics file: %w", err)
 	}
