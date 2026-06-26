@@ -419,6 +419,19 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+.PHONY: setup-scale-test-env
+setup-scale-test-env: manifests generate fmt vet ## Set up the kwokctl cluster and install CRDs for scale testing
+	./hack/scale-test-env.sh start
+
+.PHONY: cleanup-scale-test-env
+cleanup-scale-test-env: ## Tear down the kwokctl cluster used for scale tests
+	./hack/scale-test-env.sh stop
+
+.PHONY: test-scale
+test-scale: setup-scale-test-env ## Run scale tests (requires kwokctl)
+	KUBECONFIG=$(shell pwd)/.kubeconfig-scale go test -tags=scale ./test/e2e/scale/ -v -ginkgo.v
+	$(MAKE) cleanup-scale-test-env
+
 .PHONY: test-e2e-kind
 test-e2e-kind: manifests generate fmt vet ## Run e2e tests on a Kind cluster with artifact collection and log export.
 	E2E_KIND_VERSION=$(E2E_KIND_VERSION) KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) \
