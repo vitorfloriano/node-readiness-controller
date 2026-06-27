@@ -62,6 +62,8 @@ CONTROLLER_GEN_BIN := controller-gen
 CONTROLLER_GEN := $(abspath $(TOOLS_BIN_DIR)/$(CONTROLLER_GEN_BIN)-$(CONTROLLER_GEN_VER))
 CONTROLLER_GEN_PKG := sigs.k8s.io/controller-tools/cmd/controller-gen
 
+KWOK_VER := v0.8.0
+
 GOVULNCHECK_VER := v1.1.4
 GOVULNCHECK_BIN := govulncheck
 GOVULNCHECK := $(abspath $(TOOLS_BIN_DIR)/$(GOVULNCHECK_BIN)-$(GOVULNCHECK_VER))
@@ -496,3 +498,17 @@ crd-ref-docs:
 		--config=crd-ref-docs.yaml \
 		--renderer=markdown \
 		--output-path=${PWD}/docs/book/src/reference/api-spec.md
+
+## --------------------------------------
+## Scale Testing
+## --------------------------------------
+
+##@ scale testing
+
+.PHONY: setup-scale-test-env
+setup-scale-test-env: ## Setup kwokctl cluster for scale testing
+	KWOK_VERSION=$(KWOK_VER) ./hack/scale-test-setup.sh
+
+.PHONY: cleanup-scale-test-env
+cleanup-scale-test-env: ## Tear down the kwokctl cluster used for scale tests
+	./hack/scale-test-cleanup.sh
