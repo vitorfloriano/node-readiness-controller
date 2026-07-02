@@ -43,6 +43,11 @@ var _ = BeforeSuite(func() {
 
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
+
+	crdConfigPath := filepath.Join(projectRootDir, "config", "crd")
+	crdCmd := exec.Command("kubectl", "apply", "-k", crdConfigPath)
+	crdOutput, err := utils.Run(crdCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply NodeReadinessRule CRD via Kustomize:\n%s", crdOutput)
 })
 
 func ensureKwokctl(version string, targetDir string) string {
