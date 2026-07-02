@@ -60,6 +60,28 @@ var _ = BeforeSuite(func() {
 	buildOutput, err := utils.Run(buildCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to compile controller manager:\n%s", buildOutput)
 
+	homeDir, err := os.UserHomeDir()
+	Expect(err).NotTo(HaveOccurred(), "Failed to retrive user home directory")
+
+	prometheusConfigPath := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "prometheus.yaml")
+
+	extraJobYAML := `- job_name: node-readiness-controller
+  scrape_interval: 5s
+  metrics_path: /metrics
+  scheme: http
+  static_configs:
+  - targets:
+    - 127.0.0.1:8080
+`
+
+	f, err := os.OpenFile(prometheusConfigPath, os.O_APPEND|os.O_WRONLY, 0644)
+	Expect(err).NotTo(HaveOccurred())
+	defer f.Close()
+
+	_, err = f.WriteString(extraJobYAML)
+	Expect(err).NotTo(HaveOccurred())
+
+	_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
 })
 
 func ensureKwokctl(version string, targetDir string) string {
