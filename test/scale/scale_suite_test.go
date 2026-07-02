@@ -48,6 +48,18 @@ var _ = BeforeSuite(func() {
 	crdCmd := exec.Command("kubectl", "apply", "-k", crdConfigPath)
 	crdOutput, err := utils.Run(crdCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply NodeReadinessRule CRD via Kustomize:\n%s", crdOutput)
+
+	controllerBinName := "node-readiness-controller"
+	if runtime.GOOS == "windows" {
+		controllerBinName += ".exe"
+	}
+	controllerBinPath := filepath.Join(toolsBinDir, controllerBinName)
+	controllerMainPath := filepath.Join(".", "cmd", "main.go")
+
+	buildCmd := exec.Command("go", "build", "-o", controllerBinPath, controllerMainPath)
+	buildOutput, err := utils.Run(buildCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to compile controller manager:\n%s", buildOutput)
+
 })
 
 func ensureKwokctl(version string, targetDir string) string {
