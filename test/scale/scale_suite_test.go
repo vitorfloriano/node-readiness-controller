@@ -1,6 +1,7 @@
 package scale_test
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -29,6 +31,12 @@ var (
 	kubeconfigPath    string
 )
 
+//go:embed testdata/cni-readiness-rule.yaml
+var cniReadinessRuleManifest string
+
+//go:embed testdata/cni-readiness-stage.yaml
+var cniReadinessStageManifest string
+
 var _ = BeforeSuite(func() {
 
 	projectRootDir, err := utils.GetProjectDir()
@@ -39,7 +47,8 @@ var _ = BeforeSuite(func() {
 	createCmd := exec.Command(kwokctlBinaryPath,
 		"create", "cluster",
 		"--runtime", "binary",
-		"--prometheus-port", "9090")
+		"--prometheus-port", "9090",
+		"--enable-crds", "Stage")
 
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
@@ -82,6 +91,14 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
+
+	combinedManifests := cniReadinessRuleManifest + "\n---\n" + cniReadinessStageManifest
+
+	setupRuleAndStageCmd := exec.Command("kubectl", "apply", "-f", "-")
+	setupRuleAndStageCmd.Stdin = strings.NewReader(combinedManifests)
+
+	setupRuleAndStageCmdOutput, err := utils.Run(setupRuleAndStageCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply CNI NodeReadinessRule and Stage manifests:\n%s", setupRuleAndStageCmdOutput)
 })
 
 func ensureKwokctl(version string, targetDir string) string {
