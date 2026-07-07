@@ -24,3 +24,4 @@ spec:
         status: "True"
         reason: "CalicoReady"
         message: "Calico CNI plugin initialized"
+        lastTransitionTime: "{{ Now }}"
