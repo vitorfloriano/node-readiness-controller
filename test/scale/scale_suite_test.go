@@ -94,7 +94,9 @@ var _ = BeforeSuite(func() {
 	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath)
 	Expect(err).NotTo(HaveOccurred())
 
-	if !strings.Contains(string(prometheusConfigBytes), "node-readiness-controller") {
+	newConfig := string(prometheusConfigBytes)
+	modified := false
+	if !strings.Contains(newConfig, "node-readiness-controller") {
 		extraJobYAML := `- job_name: node-readiness-controller
   scrape_interval: 5s
   metrics_path: /metrics
@@ -103,11 +105,15 @@ var _ = BeforeSuite(func() {
   - targets:
     - 127.0.0.1:8080
 `
-		f, err := os.OpenFile(prometheusConfigPath, os.O_APPEND|os.O_WRONLY, 0644)
-		Expect(err).NotTo(HaveOccurred())
-		defer f.Close()
+		newConfig += extraJobYAML
+		modified = true
+	} else if strings.Contains(newConfig, "scrape_interval: 1s") {
+		newConfig = strings.ReplaceAll(newConfig, "scrape_interval: 1s", "scrape_interval: 5s")
+		modified = true
+	}
 
-		_, err = f.WriteString(extraJobYAML)
+	if modified {
+		err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0644)
 		Expect(err).NotTo(HaveOccurred())
 
 		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
