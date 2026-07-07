@@ -1,0 +1,26 @@
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: calico-readiness-stage-false
+spec:
+  resourceRef:
+    apiGroup: ""
+    kind: Node
+  selector:
+    matchLabels:
+      type: kwok
+  next:
+    statusTemplate: |
+      conditions:
+      {{- range .status.conditions }}
+      {{- if ne .type "projectcalico.org/CalicoReady" }}
+      - type: {{ .type }}
+        status: {{ .status | quote }}
+        reason: {{ .reason | quote }}
+        message: {{ .message | quote }}
+      {{- end }}
+      {{- end }}
+      - type: projectcalico.org/CalicoReady
+        status: "False"
+        reason: "CalicoProvisioning"
+        message: "Calico CNI plugin not yet initialized"
