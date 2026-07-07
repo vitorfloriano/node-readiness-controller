@@ -113,6 +113,13 @@ var _ = BeforeSuite(func() {
 		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
 	}
 
+	// Verify Prometheus readiness explicitly before proceeding (Item 6)
+	Eventually(func(g Gomega) {
+		resp, err := http.Get("http://127.0.0.1:9090/-/ready")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	}, "30s", "1s").Should(Succeed(), "Prometheus is not ready")
+
 	setupRuleCmd := exec.Command("kubectl", "apply", "-f", "-")
 	setupRuleCmd.Stdin = strings.NewReader(cniReadinessRuleManifest)
 
