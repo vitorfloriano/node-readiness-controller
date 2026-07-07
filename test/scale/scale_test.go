@@ -233,7 +233,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	scaleOutput, err := utils.Run(scaleCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to scale nodes: %s", scaleOutput)
 
-	// 2. Since nodes join pre-tainted by our KwokctlResource config, check that all targetReplicas nodes are tainted
+	// Verify all newly scaled nodes are tainted initially
 	By("Verifying all newly scaled nodes are tainted initially")
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
@@ -241,60 +241,78 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 		return count
 	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas")
 
-	// 3. Apply the True stage to remove taints
+	// ----------------------------------------------------
+	// 2. Untaint (Removal) Phase
+	// ----------------------------------------------------
 	By("Applying calico-readiness-stage-true to remove taints")
+	removeStart := time.Now()
+
 	trueStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-true.yaml")
 	applyTrueCmd := exec.Command("kubectl", "apply", "-f", trueStagePath)
 	trueOutput, err := utils.Run(applyTrueCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply true stage: %s", trueOutput)
 
-	// 4. Verify that taints are removed
-	By("Verifying taints are removed from all nodes")
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
 	}, "15m", "1s").Should(Equal(0), "Tainted nodes count did not drop to 0")
 
-	// 5. Clean up the True stage
+	removeEnd := time.Now()
+	removeDuration := removeEnd.Sub(removeStart)
+
+	// Clean up the True stage
 	deleteTrueCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-true", "--ignore-not-found")
 	_, err = utils.Run(deleteTrueCmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	// 6. Apply the False stage to add taints again
+	// Sleep 7 seconds to let Prometheus scrape the removal phase metrics
+	By("Waiting for Prometheus scrape interval (untaint phase)...")
+	time.Sleep(7 * time.Second)
+
+	removeReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Untaint (Removal) Phase [Duration: %s]", targetReplicas, removeDuration.Round(time.Millisecond)), removeEnd)
+	Expect(err).NotTo(HaveOccurred())
+	reports = append(reports, removeReport)
+
+	// ----------------------------------------------------
+	// 3. Retaint (Add) Phase
+	// ----------------------------------------------------
 	By("Applying calico-readiness-stage-false to add taints again")
+	addStart := time.Now()
+
 	falseStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-false.yaml")
 	applyFalseCmd := exec.Command("kubectl", "apply", "-f", falseStagePath)
 	falseOutput, err := utils.Run(applyFalseCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply false stage: %s", falseOutput)
 
-	// 7. Verify that taints are added back
-	By("Verifying taints are added back to all nodes")
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
 	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas after setting false")
 
-	// 8. Clean up the False stage so we are ready for the next scale phase
+	addEnd := time.Now()
+	addDuration := addEnd.Sub(addStart)
+
+	// Clean up the False stage
 	deleteFalseCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-false", "--ignore-not-found")
 	_, err = utils.Run(deleteFalseCmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Sleep 7 seconds to allow Prometheus to scrape final metrics before querying
-	By("Waiting for Prometheus scrape interval to capture final metrics...")
+	// Sleep 7 seconds to let Prometheus scrape the retaint phase metrics
+	By("Waiting for Prometheus scrape interval (retaint phase)...")
 	time.Sleep(7 * time.Second)
 
-	// Query and report all metrics dynamically
-	phaseName := fmt.Sprintf("%d Nodes Phase", targetReplicas)
-	reportStr, err := collectAndReportMetrics(ctx, phaseName)
+	addReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Retaint (Add) Phase [Duration: %s]", targetReplicas, addDuration.Round(time.Millisecond)), addEnd)
 	Expect(err).NotTo(HaveOccurred())
-
-	reports = append(reports, reportStr)
+	reports = append(reports, addReport)
 }
 
-func queryPrometheusInstant(query string) (string, error) {
-	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(query))
+func queryPrometheusAtTime(query string, evaluationTime time.Time) (string, error) {
+	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s&time=%s",
+		url.QueryEscape(query),
+		url.QueryEscape(evaluationTime.Format(time.RFC3339)),
+	)
 	resp, err := http.Get(urlStr)
 	if err != nil {
 		return "", err
@@ -326,7 +344,7 @@ func queryPrometheusInstant(query string) (string, error) {
 	return valStr, nil
 }
 
-func collectAndReportMetrics(ctx context.Context, phaseName string) (string, error) {
+func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, evaluationTime time.Time) (string, error) {
 	// 1. Fetch metadata
 	metaResp, err := http.Get("http://127.0.0.1:9090/api/v1/metadata")
 	if err != nil {
@@ -373,7 +391,6 @@ func collectAndReportMetrics(ctx context.Context, phaseName string) (string, err
 			isHist = true
 		} else if strings.HasSuffix(name, "_count") {
 			baseName = strings.TrimSuffix(name, "_count")
-			// Double check in metadata if this baseName is actually a histogram
 			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 && meta[0].Type == "histogram" {
 				isHist = true
 			}
@@ -396,7 +413,7 @@ func collectAndReportMetrics(ctx context.Context, phaseName string) (string, err
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseName))
+	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseTitle))
 
 	// Format Histograms
 	if len(histograms) > 0 {
@@ -406,9 +423,9 @@ func collectAndReportMetrics(ctx context.Context, phaseName string) (string, err
 			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[2m])) by (le))", name)
 			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[2m])) by (le))", name)
 
-			p50, _ := queryPrometheusInstant(p50Query)
-			p90, _ := queryPrometheusInstant(p90Query)
-			p99, _ := queryPrometheusInstant(p99Query)
+			p50, _ := queryPrometheusAtTime(p50Query, evaluationTime)
+			p90, _ := queryPrometheusAtTime(p90Query, evaluationTime)
+			p99, _ := queryPrometheusAtTime(p99Query, evaluationTime)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
 			sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
@@ -423,7 +440,7 @@ func collectAndReportMetrics(ctx context.Context, phaseName string) (string, err
 		sb.WriteString("### Counters (Totals & Accumulations)\n")
 		for name := range counters {
 			increaseQuery := fmt.Sprintf("sum(increase(%s[2m]))", name)
-			inc, _ := queryPrometheusInstant(increaseQuery)
+			inc, _ := queryPrometheusAtTime(increaseQuery, evaluationTime)
 			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 2m): **%s**\n", name, inc))
 		}
 		sb.WriteString("\n")
@@ -433,11 +450,11 @@ func collectAndReportMetrics(ctx context.Context, phaseName string) (string, err
 	if len(gauges) > 0 {
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for name := range gauges {
-			maxQuery := fmt.Sprintf("max_over_time(%s[5m])", name)
-			avgQuery := fmt.Sprintf("avg_over_time(%s[5m])", name)
+			maxQuery := fmt.Sprintf("max_over_time(%s[2m])", name)
+			avgQuery := fmt.Sprintf("avg_over_time(%s[2m])", name)
 
-			maxVal, _ := queryPrometheusInstant(maxQuery)
-			avgVal, _ := queryPrometheusInstant(avgQuery)
+			maxVal, _ := queryPrometheusAtTime(maxQuery, evaluationTime)
+			avgVal, _ := queryPrometheusAtTime(avgQuery, evaluationTime)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
 			sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
