@@ -308,11 +308,8 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	reports = append(reports, addReport)
 }
 
-func queryPrometheusAtTime(query string, evaluationTime time.Time) (string, error) {
-	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s&time=%s",
-		url.QueryEscape(query),
-		url.QueryEscape(evaluationTime.Format(time.RFC3339)),
-	)
+func queryPrometheusInstant(query string) (string, error) {
+	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(query))
 	resp, err := http.Get(urlStr)
 	if err != nil {
 		return "", err
@@ -415,17 +412,19 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseTitle))
 
+	ts := float64(evaluationTime.UnixNano()) / 1e9
+
 	// Format Histograms
 	if len(histograms) > 0 {
 		sb.WriteString("### Histograms (Latency & Durations)\n")
 		for name := range histograms {
-			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[2m])) by (le))", name)
-			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[2m])) by (le))", name)
-			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[2m])) by (le))", name)
+			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
+			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
+			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
 
-			p50, _ := queryPrometheusAtTime(p50Query, evaluationTime)
-			p90, _ := queryPrometheusAtTime(p90Query, evaluationTime)
-			p99, _ := queryPrometheusAtTime(p99Query, evaluationTime)
+			p50, _ := queryPrometheusInstant(p50Query)
+			p90, _ := queryPrometheusInstant(p90Query)
+			p99, _ := queryPrometheusInstant(p99Query)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
 			sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
@@ -439,8 +438,8 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	if len(counters) > 0 {
 		sb.WriteString("### Counters (Totals & Accumulations)\n")
 		for name := range counters {
-			increaseQuery := fmt.Sprintf("sum(increase(%s[2m]))", name)
-			inc, _ := queryPrometheusAtTime(increaseQuery, evaluationTime)
+			increaseQuery := fmt.Sprintf("sum(increase(%s[2m] @ %.3f))", name, ts)
+			inc, _ := queryPrometheusInstant(increaseQuery)
 			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 2m): **%s**\n", name, inc))
 		}
 		sb.WriteString("\n")
@@ -450,11 +449,11 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	if len(gauges) > 0 {
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for name := range gauges {
-			maxQuery := fmt.Sprintf("max_over_time(%s[2m])", name)
-			avgQuery := fmt.Sprintf("avg_over_time(%s[2m])", name)
+			maxQuery := fmt.Sprintf("max_over_time(%s[2m] @ %.3f)", name, ts)
+			avgQuery := fmt.Sprintf("avg_over_time(%s[2m] @ %.3f)", name, ts)
 
-			maxVal, _ := queryPrometheusAtTime(maxQuery, evaluationTime)
-			avgVal, _ := queryPrometheusAtTime(avgQuery, evaluationTime)
+			maxVal, _ := queryPrometheusInstant(maxQuery)
+			avgVal, _ := queryPrometheusInstant(avgQuery)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
 			sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
