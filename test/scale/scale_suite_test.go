@@ -59,6 +59,9 @@ var _ = BeforeSuite(func() {
 	if os.Getenv("DISABLE_QPS_LIMITS") == "true" {
 		createArgs = append(createArgs, "--disable-qps-limits")
 	}
+	if leaseSecs := os.Getenv("NODE_LEASE_DURATION_SECONDS"); leaseSecs != "" {
+		createArgs = append(createArgs, "--node-lease-duration-seconds", leaseSecs)
+	}
 
 	createCmd := exec.Command(kwokctlBinaryPath, createArgs...)
 	createOuput, err := utils.Run(createCmd)
