@@ -115,17 +115,36 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	It("should successfully run the scale test phases and evaluate performance", func() {
 		ctx := context.Background()
 
-		// Run 50 nodes phase
-		runScalePhase(ctx, clientset, 50)
+		var phases []int
 
-		// Run 100 nodes phase
-		runScalePhase(ctx, clientset, 100)
+		if nodeCountStr := os.Getenv("NODE_COUNT"); nodeCountStr != "" {
+			count, err := strconv.Atoi(nodeCountStr)
+			Expect(err).NotTo(HaveOccurred(), "Invalid NODE_COUNT: %s", nodeCountStr)
+			phases = []int{count}
+		} else {
+			size := strings.ToUpper(os.Getenv("SCALE_SIZE"))
+			if size == "" {
+				size = "EXTRA_SMALL" // default to 50 nodes for a fast local test
+			}
 
-		// Run 500 nodes phase
-		runScalePhase(ctx, clientset, 500)
+			switch size {
+			case "XS", "EXTRA_SMALL":
+				phases = []int{50}
+			case "S", "SMALL":
+				phases = []int{50, 100}
+			case "M", "MEDIUM":
+				phases = []int{50, 100, 500}
+			case "L", "LARGE":
+				phases = []int{50, 100, 500, 1000}
+			default:
+				Fail(fmt.Sprintf("Invalid SCALE_SIZE '%s'. Must be one of: EXTRA_SMALL/XS, SMALL/S, MEDIUM/M, LARGE/L", size))
+			}
+		}
 
-		// Run 1000 nodes phase
-		runScalePhase(ctx, clientset, 1000)
+		By(fmt.Sprintf("Running scale test with phases: %v", phases))
+		for _, count := range phases {
+			runScalePhase(ctx, clientset, count)
+		}
 	})
 })
 
