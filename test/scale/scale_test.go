@@ -270,7 +270,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	By("Waiting for Prometheus scrape interval (untaint phase)...")
 	time.Sleep(7 * time.Second)
 
-	removeReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Untaint (Removal) Phase [Duration: %s]", targetReplicas, removeDuration.Round(time.Millisecond)), removeEnd)
+	removeReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Untaint (Removal) Phase [Duration: %s]", targetReplicas, removeDuration.Round(time.Millisecond)))
 	Expect(err).NotTo(HaveOccurred())
 	reports = append(reports, removeReport)
 
@@ -303,7 +303,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	By("Waiting for Prometheus scrape interval (retaint phase)...")
 	time.Sleep(7 * time.Second)
 
-	addReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Retaint (Add) Phase [Duration: %s]", targetReplicas, addDuration.Round(time.Millisecond)), addEnd)
+	addReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Retaint (Add) Phase [Duration: %s]", targetReplicas, addDuration.Round(time.Millisecond)))
 	Expect(err).NotTo(HaveOccurred())
 	reports = append(reports, addReport)
 }
@@ -341,7 +341,7 @@ func queryPrometheusInstant(query string) (string, error) {
 	return valStr, nil
 }
 
-func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, evaluationTime time.Time) (string, error) {
+func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (string, error) {
 	// 1. Fetch metadata
 	metaResp, err := http.Get("http://127.0.0.1:9090/api/v1/metadata")
 	if err != nil {
@@ -412,15 +412,13 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseTitle))
 
-	ts := float64(evaluationTime.UnixNano()) / 1e9
-
 	// Format Histograms
 	if len(histograms) > 0 {
 		sb.WriteString("### Histograms (Latency & Durations)\n")
 		for name := range histograms {
-			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
-			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
-			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[2m] @ %.3f)) by (le))", name, ts)
+			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[1m])) by (le))", name)
+			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[1m])) by (le))", name)
+			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[1m])) by (le))", name)
 
 			p50, _ := queryPrometheusInstant(p50Query)
 			p90, _ := queryPrometheusInstant(p90Query)
@@ -438,9 +436,9 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	if len(counters) > 0 {
 		sb.WriteString("### Counters (Totals & Accumulations)\n")
 		for name := range counters {
-			increaseQuery := fmt.Sprintf("sum(increase(%s[2m] @ %.3f))", name, ts)
+			increaseQuery := fmt.Sprintf("sum(increase(%s[1m]))", name)
 			inc, _ := queryPrometheusInstant(increaseQuery)
-			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 2m): **%s**\n", name, inc))
+			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **%s**\n", name, inc))
 		}
 		sb.WriteString("\n")
 	}
@@ -449,8 +447,8 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ev
 	if len(gauges) > 0 {
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for name := range gauges {
-			maxQuery := fmt.Sprintf("max_over_time(%s[2m] @ %.3f)", name, ts)
-			avgQuery := fmt.Sprintf("avg_over_time(%s[2m] @ %.3f)", name, ts)
+			maxQuery := fmt.Sprintf("max_over_time(%s[1m])", name)
+			avgQuery := fmt.Sprintf("avg_over_time(%s[1m])", name)
 
 			maxVal, _ := queryPrometheusInstant(maxQuery)
 			avgVal, _ := queryPrometheusInstant(avgQuery)
