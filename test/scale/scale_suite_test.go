@@ -48,11 +48,13 @@ var _ = BeforeSuite(func() {
 	// Clean up any existing cluster first to ensure we start fresh
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
+	kwokConfigPath := filepath.Join(projectRootDir, "test", "scale", "testdata", "kwokctl-config.yaml")
 	createCmd := exec.Command(kwokctlBinaryPath,
 		"create", "cluster",
 		"--runtime", "binary",
 		"--prometheus-port", "9090",
-		"--enable-crds", "Stage")
+		"--enable-crds", "Stage",
+		"--config", kwokConfigPath)
 
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
