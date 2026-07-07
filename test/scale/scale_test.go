@@ -117,6 +117,15 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 
 		// Run 50 nodes phase
 		runScalePhase(ctx, clientset, 50)
+
+		// Run 100 nodes phase
+		runScalePhase(ctx, clientset, 100)
+
+		// Run 500 nodes phase
+		runScalePhase(ctx, clientset, 500)
+
+		// Run 1000 nodes phase
+		runScalePhase(ctx, clientset, 1000)
 	})
 })
 
@@ -211,7 +220,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
-	}, "30s", "500ms").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas")
+	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas")
 
 	// 3. Apply the True stage to remove taints
 	By("Applying calico-readiness-stage-true to remove taints")
@@ -226,7 +235,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
-	}, "30s", "500ms").Should(Equal(0), "Tainted nodes count did not drop to 0")
+	}, "15m", "1s").Should(Equal(0), "Tainted nodes count did not drop to 0")
 
 	// 5. Clean up the True stage
 	deleteTrueCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-true", "--ignore-not-found")
@@ -246,7 +255,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
-	}, "30s", "500ms").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas after setting false")
+	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas after setting false")
 
 	// 8. Clean up the False stage so we are ready for the next scale phase
 	deleteFalseCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-false", "--ignore-not-found")
