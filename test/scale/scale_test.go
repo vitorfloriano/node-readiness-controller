@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -52,8 +53,8 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	)
 
 	BeforeEach(func() {
-		// Clean up any existing controller process
-		_ = exec.Command("pkill", "-f", "node-readiness-controller").Run()
+		// Reset the mutable reports slice to prevent carryover state (Item 7)
+		reports = nil
 
 		// Resolve kubeconfig path
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -184,7 +185,8 @@ var _ = AfterSuite(func() {
 	// 4. Stop the kwok cluster to flush TSDB safely
 	By("Stopping the kwokctl cluster to flush TSDB...")
 	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok")
-	_, _ = utils.Run(stopCmd)
+	stopOutput, err := utils.Run(stopCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to stop kwok cluster:\n%s", stopOutput)
 
 	// Wait 2 seconds for Prometheus to shutdown completely
 	time.Sleep(2 * time.Second)
@@ -308,13 +310,26 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	reports = append(reports, addReport)
 }
 
-func queryPrometheusInstant(query string) (string, error) {
+func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
+}
+
+func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(query))
-	resp, err := http.Get(urlStr)
+	resp, err := doGetRequest(ctx, urlStr)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
 
 	var promResp struct {
 		Status string `json:"status"`
@@ -330,20 +345,24 @@ func queryPrometheusInstant(query string) (string, error) {
 		return "", err
 	}
 
-	if promResp.Status != "success" || len(promResp.Data.Result) == 0 || len(promResp.Data.Result[0].Value) < 2 {
-		return "0", nil
+	if promResp.Status != "success" {
+		return "", fmt.Errorf("prometheus query failed: %s", promResp.Status)
+	}
+
+	if len(promResp.Data.Result) == 0 || len(promResp.Data.Result[0].Value) < 2 {
+		return "", fmt.Errorf("no data returned")
 	}
 
 	valStr, ok := promResp.Data.Result[0].Value[1].(string)
 	if !ok {
-		return "0", nil
+		return "", fmt.Errorf("invalid value format")
 	}
 	return valStr, nil
 }
 
 func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (string, error) {
 	// 1. Fetch metadata
-	metaResp, err := http.Get("http://127.0.0.1:9090/api/v1/metadata")
+	metaResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/metadata")
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch metadata: %w", err)
 	}
@@ -355,7 +374,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (s
 	}
 
 	// 2. Fetch active series
-	seriesResp, err := http.Get("http://127.0.0.1:9090/api/v1/query?query={job=\"node-readiness-controller\"}")
+	seriesResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/query?query={job=\"node-readiness-controller\"}")
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch series: %w", err)
 	}
@@ -414,48 +433,90 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (s
 
 	// Format Histograms
 	if len(histograms) > 0 {
-		sb.WriteString("### Histograms (Latency & Durations)\n")
+		var sortedHistograms []string
 		for name := range histograms {
+			sortedHistograms = append(sortedHistograms, name)
+		}
+		sort.Strings(sortedHistograms)
+
+		sb.WriteString("### Histograms (Latency & Durations)\n")
+		for _, name := range sortedHistograms {
 			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[1m])) by (le))", name)
 			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[1m])) by (le))", name)
 			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[1m])) by (le))", name)
 
-			p50, _ := queryPrometheusInstant(p50Query)
-			p90, _ := queryPrometheusInstant(p90Query)
-			p99, _ := queryPrometheusInstant(p99Query)
+			p50, err50 := queryPrometheusInstant(ctx, p50Query)
+			p90, err90 := queryPrometheusInstant(ctx, p90Query)
+			p99, err99 := queryPrometheusInstant(ctx, p99Query)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
-			sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
-			sb.WriteString(fmt.Sprintf("    *   **P90**: %s s\n", p90))
-			sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: %s s\n", p99))
+			if err50 != nil {
+				sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: N/A (Error: %v)\n", err50))
+			} else {
+				sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
+			}
+			if err90 != nil {
+				sb.WriteString(fmt.Sprintf("    *   **P90**: N/A (Error: %v)\n", err90))
+			} else {
+				sb.WriteString(fmt.Sprintf("    *   **P90**: %s s\n", p90))
+			}
+			if err99 != nil {
+				sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: N/A (Error: %v)\n", err99))
+			} else {
+				sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: %s s\n", p99))
+			}
 		}
 		sb.WriteString("\n")
 	}
 
 	// Format Counters
 	if len(counters) > 0 {
-		sb.WriteString("### Counters (Totals & Accumulations)\n")
+		var sortedCounters []string
 		for name := range counters {
+			sortedCounters = append(sortedCounters, name)
+		}
+		sort.Strings(sortedCounters)
+
+		sb.WriteString("### Counters (Totals & Accumulations)\n")
+		for _, name := range sortedCounters {
 			increaseQuery := fmt.Sprintf("sum(increase(%s[1m]))", name)
-			inc, _ := queryPrometheusInstant(increaseQuery)
-			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **%s**\n", name, inc))
+			inc, errInc := queryPrometheusInstant(ctx, increaseQuery)
+			if errInc != nil {
+				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **N/A (Error: %v)**\n", name, errInc))
+			} else {
+				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **%s**\n", name, inc))
+			}
 		}
 		sb.WriteString("\n")
 	}
 
 	// Format Gauges
 	if len(gauges) > 0 {
-		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
+		var sortedGauges []string
 		for name := range gauges {
+			sortedGauges = append(sortedGauges, name)
+		}
+		sort.Strings(sortedGauges)
+
+		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
+		for _, name := range sortedGauges {
 			maxQuery := fmt.Sprintf("max_over_time(%s[1m])", name)
 			avgQuery := fmt.Sprintf("avg_over_time(%s[1m])", name)
 
-			maxVal, _ := queryPrometheusInstant(maxQuery)
-			avgVal, _ := queryPrometheusInstant(avgQuery)
+			maxVal, errMax := queryPrometheusInstant(ctx, maxQuery)
+			avgVal, errAvg := queryPrometheusInstant(ctx, avgQuery)
 
 			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
-			sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
-			sb.WriteString(fmt.Sprintf("    *   **Average**: %s\n", avgVal))
+			if errMax != nil {
+				sb.WriteString(fmt.Sprintf("    *   **Max Peak**: N/A (Error: %v)\n", errMax))
+			} else {
+				sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
+			}
+			if errAvg != nil {
+				sb.WriteString(fmt.Sprintf("    *   **Average**: N/A (Error: %v)\n", errAvg))
+			} else {
+				sb.WriteString(fmt.Sprintf("    *   **Average**: %s\n", avgVal))
+			}
 		}
 		sb.WriteString("\n")
 	}
