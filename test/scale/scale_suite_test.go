@@ -48,6 +48,7 @@ var _ = BeforeSuite(func() {
 	// Clean up any existing cluster first to ensure we start fresh
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
+	kwokConfigPath := filepath.Join(projectRootDir, "test", "scale", "testdata", "kwokctl-config.yaml")
 	createArgs := []string{
 		"create", "cluster",
 		"--runtime", "binary",
