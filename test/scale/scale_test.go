@@ -373,50 +373,7 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 	return valStr, nil
 }
 
-func waitForFreshSample(ctx context.Context, metricName string, phaseEnd time.Time) (time.Time, error) {
-	By(fmt.Sprintf("Waiting for Prometheus to scrape fresh sample for %s (>= %v)", metricName, phaseEnd.Format(time.RFC3339)))
 
-	phaseEndTs := float64(phaseEnd.UnixNano()) / 1e9
-	var latestTime time.Time
-
-	Eventually(func(g Gomega) {
-		urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(metricName))
-		resp, err := doGetRequest(ctx, urlStr)
-		g.Expect(err).NotTo(HaveOccurred())
-		defer resp.Body.Close()
-
-		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-		var promResp struct {
-			Status string `json:"status"`
-			Data   struct {
-				ResultType string `json:"resultType"`
-				Result     []struct {
-					Value []interface{} `json:"value"`
-				} `json:"result"`
-			} `json:"data"`
-		}
-
-		err = json.NewDecoder(resp.Body).Decode(&promResp)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(promResp.Status).To(Equal("success"))
-		g.Expect(promResp.Data.Result).NotTo(BeEmpty())
-		g.Expect(promResp.Data.Result[0].Value).To(HaveLen(2))
-
-		sampleTs, ok := promResp.Data.Result[0].Value[0].(float64)
-		g.Expect(ok).To(BeTrue(), "Failed to parse sample timestamp as float64")
-
-		g.Expect(sampleTs).To(BeNumerically(">=", phaseEndTs),
-			"Sample timestamp %.3f is older than phaseEnd %.3f", sampleTs, phaseEndTs)
-
-		// Record the actual scrape time
-		sec := int64(sampleTs)
-		nsec := int64((sampleTs - float64(sec)) * 1e9)
-		latestTime = time.Unix(sec, nsec)
-	}, "45s", "1s").Should(Succeed(), "Timed out waiting for Prometheus to scrape fresh sample for %s", metricName)
-
-	return latestTime, nil
-}
 
 func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (string, error) {
 	// Set evaluation time to phaseEnd + 5s to ensure the final scrape is included (Item 2)
