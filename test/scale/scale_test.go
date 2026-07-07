@@ -22,16 +22,27 @@ import (
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
 
-type PhaseResult struct {
-	NodesCount        int
-	PhaseDuration     time.Duration
-	TotalTaintAdds    string
-	TotalTaintRemoves string
-	P99Latency        string
-	MaxQueueDepth     string
+type Metadata struct {
+	Type string `json:"type"`
+	Help string `json:"help"`
 }
 
-var phaseResults []PhaseResult
+type MetadataResponse struct {
+	Status string                `json:"status"`
+	Data   map[string][]Metadata `json:"data"`
+}
+
+type QueryResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		ResultType string `json:"resultType"`
+		Result     []struct {
+			Metric map[string]string `json:"metric"`
+		} `json:"result"`
+	} `json:"data"`
+}
+
+var reports []string
 
 var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	var (
@@ -123,7 +134,14 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// 2. Generate and write Markdown Performance Report
-	reportContent := generateMarkdownReport()
+	var sb strings.Builder
+	sb.WriteString("# Node Readiness Controller Scale Test Performance Report\n\n")
+	for _, r := range reports {
+		sb.WriteString(r)
+		sb.WriteString("\n---\n\n")
+	}
+	reportContent := sb.String()
+
 	reportPath := filepath.Join(artifactsDir, "performance_report.md")
 	err = os.WriteFile(reportPath, []byte(reportContent), 0644)
 	Expect(err).NotTo(HaveOccurred())
@@ -180,8 +198,6 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	projectRootDir, err := utils.GetProjectDir()
 	Expect(err).NotTo(HaveOccurred())
 
-	startTime := time.Now()
-
 	// 1. Scale using kwokctl
 	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node",
 		"--replicas", strconv.Itoa(targetReplicas),
@@ -237,33 +253,16 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	_, err = utils.Run(deleteFalseCmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	duration := time.Since(startTime)
-
 	// Sleep 7 seconds to allow Prometheus to scrape final metrics before querying
 	By("Waiting for Prometheus scrape interval to capture final metrics...")
 	time.Sleep(7 * time.Second)
 
-	// Query Prometheus metrics
-	adds, err := queryPrometheusInstant(`node_readiness_taint_operations_total{operation="add"}`)
+	// Query and report all metrics dynamically
+	phaseName := fmt.Sprintf("%d Nodes Phase", targetReplicas)
+	reportStr, err := collectAndReportMetrics(ctx, phaseName)
 	Expect(err).NotTo(HaveOccurred())
 
-	removes, err := queryPrometheusInstant(`node_readiness_taint_operations_total{operation="remove"}`)
-	Expect(err).NotTo(HaveOccurred())
-
-	p99, err := queryPrometheusInstant(`histogram_quantile(0.99, sum(rate(node_readiness_reconciliation_latency_seconds_bucket[1m])) by (le))`)
-	Expect(err).NotTo(HaveOccurred())
-
-	maxQueue, err := queryPrometheusInstant(`max_over_time(workqueue_depth{controller="node"}[5m])`)
-	Expect(err).NotTo(HaveOccurred())
-
-	phaseResults = append(phaseResults, PhaseResult{
-		NodesCount:        targetReplicas,
-		PhaseDuration:     duration,
-		TotalTaintAdds:    adds,
-		TotalTaintRemoves: removes,
-		P99Latency:        p99,
-		MaxQueueDepth:     maxQueue,
-	})
+	reports = append(reports, reportStr)
 }
 
 func queryPrometheusInstant(query string) (string, error) {
@@ -299,23 +298,127 @@ func queryPrometheusInstant(query string) (string, error) {
 	return valStr, nil
 }
 
-func generateMarkdownReport() string {
-	var sb strings.Builder
-	sb.WriteString("# Node Readiness Controller Scale Test Performance Report\n\n")
-	sb.WriteString("| Phase | Duration | Total Adds | Total Removes | P99 Latency (s) | Max Queue Depth |\n")
-	sb.WriteString("|---|---|---|---|---|---|\n")
-
-	for _, res := range phaseResults {
-		sb.WriteString(fmt.Sprintf("| %d Nodes | %s | %s | %s | %s | %s |\n",
-			res.NodesCount,
-			res.PhaseDuration.Round(time.Millisecond).String(),
-			res.TotalTaintAdds,
-			res.TotalTaintRemoves,
-			res.P99Latency,
-			res.MaxQueueDepth,
-		))
+func collectAndReportMetrics(ctx context.Context, phaseName string) (string, error) {
+	// 1. Fetch metadata
+	metaResp, err := http.Get("http://127.0.0.1:9090/api/v1/metadata")
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch metadata: %w", err)
 	}
-	return sb.String()
+	defer metaResp.Body.Close()
+
+	var metadata MetadataResponse
+	if err := json.NewDecoder(metaResp.Body).Decode(&metadata); err != nil {
+		return "", fmt.Errorf("failed to decode metadata: %w", err)
+	}
+
+	// 2. Fetch active series
+	seriesResp, err := http.Get("http://127.0.0.1:9090/api/v1/query?query={job=\"node-readiness-controller\"}")
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch series: %w", err)
+	}
+	defer seriesResp.Body.Close()
+
+	var series QueryResponse
+	if err := json.NewDecoder(seriesResp.Body).Decode(&series); err != nil {
+		return "", fmt.Errorf("failed to decode series: %w", err)
+	}
+
+	// 3. Deduplicate and categorize metrics
+	histograms := make(map[string]bool)
+	counters := make(map[string]bool)
+	gauges := make(map[string]bool)
+
+	for _, res := range series.Data.Result {
+		name := res.Metric["__name__"]
+		if name == "" {
+			continue
+		}
+
+		// Check if it's a histogram suffix
+		baseName := name
+		isHist := false
+		if strings.HasSuffix(name, "_bucket") {
+			baseName = strings.TrimSuffix(name, "_bucket")
+			isHist = true
+		} else if strings.HasSuffix(name, "_sum") {
+			baseName = strings.TrimSuffix(name, "_sum")
+			isHist = true
+		} else if strings.HasSuffix(name, "_count") {
+			baseName = strings.TrimSuffix(name, "_count")
+			// Double check in metadata if this baseName is actually a histogram
+			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 && meta[0].Type == "histogram" {
+				isHist = true
+			}
+		}
+
+		if isHist {
+			histograms[baseName] = true
+			continue
+		}
+
+		// Look up type in metadata
+		if meta, ok := metadata.Data[name]; ok && len(meta) > 0 {
+			switch meta[0].Type {
+			case "counter":
+				counters[name] = true
+			case "gauge":
+				gauges[name] = true
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseName))
+
+	// Format Histograms
+	if len(histograms) > 0 {
+		sb.WriteString("### Histograms (Latency & Durations)\n")
+		for name := range histograms {
+			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[2m])) by (le))", name)
+			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[2m])) by (le))", name)
+			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[2m])) by (le))", name)
+
+			p50, _ := queryPrometheusInstant(p50Query)
+			p90, _ := queryPrometheusInstant(p90Query)
+			p99, _ := queryPrometheusInstant(p99Query)
+
+			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
+			sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
+			sb.WriteString(fmt.Sprintf("    *   **P90**: %s s\n", p90))
+			sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: %s s\n", p99))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Format Counters
+	if len(counters) > 0 {
+		sb.WriteString("### Counters (Totals & Accumulations)\n")
+		for name := range counters {
+			increaseQuery := fmt.Sprintf("sum(increase(%s[2m]))", name)
+			inc, _ := queryPrometheusInstant(increaseQuery)
+			sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 2m): **%s**\n", name, inc))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Format Gauges
+	if len(gauges) > 0 {
+		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
+		for name := range gauges {
+			maxQuery := fmt.Sprintf("max_over_time(%s[5m])", name)
+			avgQuery := fmt.Sprintf("avg_over_time(%s[5m])", name)
+
+			maxVal, _ := queryPrometheusInstant(maxQuery)
+			avgVal, _ := queryPrometheusInstant(avgQuery)
+
+			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
+			sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
+			sb.WriteString(fmt.Sprintf("    *   **Average**: %s\n", avgVal))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
 }
 
 func copyFile(src, dst string) error {
