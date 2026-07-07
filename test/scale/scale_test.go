@@ -2,12 +2,17 @@ package scale_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -16,6 +21,17 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
+
+type PhaseResult struct {
+	NodesCount        int
+	PhaseDuration     time.Duration
+	TotalTaintAdds    string
+	TotalTaintRemoves string
+	P99Latency        string
+	MaxQueueDepth     string
+}
+
+var phaseResults []PhaseResult
 
 var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	var (
@@ -93,6 +109,53 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	})
 })
 
+var _ = AfterSuite(func() {
+	// 1. Determine artifacts directory
+	projectRootDir, err := utils.GetProjectDir()
+	Expect(err).NotTo(HaveOccurred())
+
+	artifactsDir := os.Getenv("ARTIFACTS")
+	if artifactsDir == "" {
+		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
+	}
+
+	err = os.MkdirAll(artifactsDir, 0755)
+	Expect(err).NotTo(HaveOccurred())
+
+	// 2. Generate and write Markdown Performance Report
+	reportContent := generateMarkdownReport()
+	reportPath := filepath.Join(artifactsDir, "performance_report.md")
+	err = os.WriteFile(reportPath, []byte(reportContent), 0644)
+	Expect(err).NotTo(HaveOccurred())
+
+	// 3. Export Controller log file
+	srcLogPath := filepath.Join(projectRootDir, "controller.log")
+	if _, err := os.Stat(srcLogPath); err == nil {
+		destLogPath := filepath.Join(artifactsDir, "controller.log")
+		_ = copyFile(srcLogPath, destLogPath)
+	}
+
+	// 4. Stop the kwok cluster to flush TSDB safely
+	By("Stopping the kwokctl cluster to flush TSDB...")
+	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok")
+	_, _ = utils.Run(stopCmd)
+
+	// Wait 2 seconds for Prometheus to shutdown completely
+	time.Sleep(2 * time.Second)
+
+	// 5. Tar the Prometheus TSDB directory
+	homeDir, err := os.UserHomeDir()
+	Expect(err).NotTo(HaveOccurred())
+	prometheusDataDir := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "data")
+
+	if _, err := os.Stat(prometheusDataDir); err == nil {
+		tarPath := filepath.Join(artifactsDir, "prometheus_tsdb.tar.gz")
+		tarCmd := exec.Command("tar", "-czf", tarPath, "-C", prometheusDataDir, ".")
+		_, err = utils.Run(tarCmd)
+		Expect(err).NotTo(HaveOccurred())
+	}
+})
+
 func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
 	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "type=kwok"})
 	if err != nil {
@@ -116,6 +179,8 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 
 	projectRootDir, err := utils.GetProjectDir()
 	Expect(err).NotTo(HaveOccurred())
+
+	startTime := time.Now()
 
 	// 1. Scale using kwokctl
 	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node",
@@ -171,4 +236,101 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	deleteFalseCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-false", "--ignore-not-found")
 	_, err = utils.Run(deleteFalseCmd)
 	Expect(err).NotTo(HaveOccurred())
+
+	duration := time.Since(startTime)
+
+	// Sleep 7 seconds to allow Prometheus to scrape final metrics before querying
+	By("Waiting for Prometheus scrape interval to capture final metrics...")
+	time.Sleep(7 * time.Second)
+
+	// Query Prometheus metrics
+	adds, err := queryPrometheusInstant(`node_readiness_taint_operations_total{operation="add"}`)
+	Expect(err).NotTo(HaveOccurred())
+
+	removes, err := queryPrometheusInstant(`node_readiness_taint_operations_total{operation="remove"}`)
+	Expect(err).NotTo(HaveOccurred())
+
+	p99, err := queryPrometheusInstant(`histogram_quantile(0.99, sum(rate(node_readiness_reconciliation_latency_seconds_bucket[1m])) by (le))`)
+	Expect(err).NotTo(HaveOccurred())
+
+	maxQueue, err := queryPrometheusInstant(`max_over_time(workqueue_depth{controller="node"}[5m])`)
+	Expect(err).NotTo(HaveOccurred())
+
+	phaseResults = append(phaseResults, PhaseResult{
+		NodesCount:        targetReplicas,
+		PhaseDuration:     duration,
+		TotalTaintAdds:    adds,
+		TotalTaintRemoves: removes,
+		P99Latency:        p99,
+		MaxQueueDepth:     maxQueue,
+	})
+}
+
+func queryPrometheusInstant(query string) (string, error) {
+	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(query))
+	resp, err := http.Get(urlStr)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var promResp struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Value []interface{} `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&promResp); err != nil {
+		return "", err
+	}
+
+	if promResp.Status != "success" || len(promResp.Data.Result) == 0 || len(promResp.Data.Result[0].Value) < 2 {
+		return "0", nil
+	}
+
+	valStr, ok := promResp.Data.Result[0].Value[1].(string)
+	if !ok {
+		return "0", nil
+	}
+	return valStr, nil
+}
+
+func generateMarkdownReport() string {
+	var sb strings.Builder
+	sb.WriteString("# Node Readiness Controller Scale Test Performance Report\n\n")
+	sb.WriteString("| Phase | Duration | Total Adds | Total Removes | P99 Latency (s) | Max Queue Depth |\n")
+	sb.WriteString("|---|---|---|---|---|---|\n")
+
+	for _, res := range phaseResults {
+		sb.WriteString(fmt.Sprintf("| %d Nodes | %s | %s | %s | %s | %s |\n",
+			res.NodesCount,
+			res.PhaseDuration.Round(time.Millisecond).String(),
+			res.TotalTaintAdds,
+			res.TotalTaintRemoves,
+			res.P99Latency,
+			res.MaxQueueDepth,
+		))
+	}
+	return sb.String()
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
 }
