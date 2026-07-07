@@ -43,6 +43,12 @@ type QueryResponse struct {
 	} `json:"data"`
 }
 
+type PhaseStats struct {
+	Title string
+	Start time.Time
+	End   time.Time
+}
+
 var reports []string
 
 var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
@@ -143,8 +149,15 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		}
 
 		By(fmt.Sprintf("Running scale test with phases: %v", phases))
+		var completedPhases []PhaseStats
 		for _, count := range phases {
-			runScalePhase(ctx, clientset, count)
+			completedPhases = append(completedPhases, runScalePhase(ctx, clientset, count)...)
+		}
+
+		for _, phase := range completedPhases {
+			report, err := collectAndReportMetricsForWindow(ctx, phase.Title, phase.Start, phase.End)
+			Expect(err).NotTo(HaveOccurred())
+			reports = append(reports, report)
 		}
 	})
 })
@@ -222,7 +235,7 @@ func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (in
 	return count, nil
 }
 
-func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetReplicas int) {
+func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetReplicas int) []PhaseStats {
 	By(fmt.Sprintf("Scaling nodes to %d", targetReplicas))
 
 	projectRootDir, err := utils.GetProjectDir()
@@ -242,6 +255,8 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 		g.Expect(err).NotTo(HaveOccurred())
 		return count
 	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas")
+
+	var phases []PhaseStats
 
 	// ----------------------------------------------------
 	// 2. Untaint (Removal) Phase
@@ -268,13 +283,11 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	_, err = utils.Run(deleteTrueCmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Sleep 7 seconds to let Prometheus scrape the removal phase metrics
-	By("Waiting for Prometheus scrape interval (untaint phase)...")
-	time.Sleep(7 * time.Second)
-
-	removeReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Untaint (Removal) Phase [Duration: %s]", targetReplicas, removeDuration.Round(time.Millisecond)))
-	Expect(err).NotTo(HaveOccurred())
-	reports = append(reports, removeReport)
+	phases = append(phases, PhaseStats{
+		Title: fmt.Sprintf("%d Nodes - Untaint (Removal) Phase [Duration: %s]", targetReplicas, removeDuration.Round(time.Millisecond)),
+		Start: removeStart,
+		End:   removeEnd,
+	})
 
 	// ----------------------------------------------------
 	// 3. Retaint (Add) Phase
@@ -301,13 +314,13 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	_, err = utils.Run(deleteFalseCmd)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Sleep 7 seconds to let Prometheus scrape the retaint phase metrics
-	By("Waiting for Prometheus scrape interval (retaint phase)...")
-	time.Sleep(7 * time.Second)
+	phases = append(phases, PhaseStats{
+		Title: fmt.Sprintf("%d Nodes - Retaint (Add) Phase [Duration: %s]", targetReplicas, addDuration.Round(time.Millisecond)),
+		Start: addStart,
+		End:   addEnd,
+	})
 
-	addReport, err := collectAndReportMetricsForWindow(ctx, fmt.Sprintf("%d Nodes - Retaint (Add) Phase [Duration: %s]", targetReplicas, addDuration.Round(time.Millisecond)))
-	Expect(err).NotTo(HaveOccurred())
-	reports = append(reports, addReport)
+	return phases
 }
 
 func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
@@ -360,7 +373,60 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 	return valStr, nil
 }
 
-func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (string, error) {
+func waitForFreshSample(ctx context.Context, metricName string, phaseEnd time.Time) (time.Time, error) {
+	By(fmt.Sprintf("Waiting for Prometheus to scrape fresh sample for %s (>= %v)", metricName, phaseEnd.Format(time.RFC3339)))
+
+	phaseEndTs := float64(phaseEnd.UnixNano()) / 1e9
+	var latestTime time.Time
+
+	Eventually(func(g Gomega) {
+		urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(metricName))
+		resp, err := doGetRequest(ctx, urlStr)
+		g.Expect(err).NotTo(HaveOccurred())
+		defer resp.Body.Close()
+
+		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		var promResp struct {
+			Status string `json:"status"`
+			Data   struct {
+				ResultType string `json:"resultType"`
+				Result     []struct {
+					Value []interface{} `json:"value"`
+				} `json:"result"`
+			} `json:"data"`
+		}
+
+		err = json.NewDecoder(resp.Body).Decode(&promResp)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(promResp.Status).To(Equal("success"))
+		g.Expect(promResp.Data.Result).NotTo(BeEmpty())
+		g.Expect(promResp.Data.Result[0].Value).To(HaveLen(2))
+
+		sampleTs, ok := promResp.Data.Result[0].Value[0].(float64)
+		g.Expect(ok).To(BeTrue(), "Failed to parse sample timestamp as float64")
+
+		g.Expect(sampleTs).To(BeNumerically(">=", phaseEndTs),
+			"Sample timestamp %.3f is older than phaseEnd %.3f", sampleTs, phaseEndTs)
+
+		// Record the actual scrape time
+		sec := int64(sampleTs)
+		nsec := int64((sampleTs - float64(sec)) * 1e9)
+		latestTime = time.Unix(sec, nsec)
+	}, "45s", "1s").Should(Succeed(), "Timed out waiting for Prometheus to scrape fresh sample for %s", metricName)
+
+	return latestTime, nil
+}
+
+func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (string, error) {
+	// Set evaluation time to phaseEnd + 5s to ensure the final scrape is included (Item 2)
+	evalTime := phaseEnd.Add(5 * time.Second)
+	lookbackSecs := int(evalTime.Sub(phaseStart).Seconds())
+	if lookbackSecs < 10 {
+		lookbackSecs = 10 // Ensure a minimum lookback of 10 seconds to include at least two scrapes
+	}
+	ts := float64(evalTime.UnixNano()) / 1e9
+
 	// 1. Fetch metadata
 	metaResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/metadata")
 	if err != nil {
@@ -441,9 +507,9 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (s
 
 		sb.WriteString("### Histograms (Latency & Durations)\n")
 		for _, name := range sortedHistograms {
-			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[1m])) by (le))", name)
-			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[1m])) by (le))", name)
-			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[1m])) by (le))", name)
+			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
+			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
+			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
 
 			p50, err50 := queryPrometheusInstant(ctx, p50Query)
 			p90, err90 := queryPrometheusInstant(ctx, p90Query)
@@ -479,12 +545,12 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (s
 
 		sb.WriteString("### Counters (Totals & Accumulations)\n")
 		for _, name := range sortedCounters {
-			increaseQuery := fmt.Sprintf("sum(increase(%s[1m]))", name)
+			increaseQuery := fmt.Sprintf("sum(increase(%s[%ds] @ %.3f))", name, lookbackSecs, ts)
 			inc, errInc := queryPrometheusInstant(ctx, increaseQuery)
 			if errInc != nil {
-				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **N/A (Error: %v)**\n", name, errInc))
+				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **N/A (Error: %v)**\n", name, lookbackSecs, errInc))
 			} else {
-				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in 1m): **%s**\n", name, inc))
+				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **%s**\n", name, lookbackSecs, inc))
 			}
 		}
 		sb.WriteString("\n")
@@ -500,8 +566,8 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string) (s
 
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for _, name := range sortedGauges {
-			maxQuery := fmt.Sprintf("max_over_time(%s[1m])", name)
-			avgQuery := fmt.Sprintf("avg_over_time(%s[1m])", name)
+			maxQuery := fmt.Sprintf("max_over_time(%s[%ds] @ %.3f)", name, lookbackSecs, ts)
+			avgQuery := fmt.Sprintf("avg_over_time(%s[%ds] @ %.3f)", name, lookbackSecs, ts)
 
 			maxVal, errMax := queryPrometheusInstant(ctx, maxQuery)
 			avgVal, errAvg := queryPrometheusInstant(ctx, avgQuery)
