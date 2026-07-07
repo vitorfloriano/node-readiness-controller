@@ -1,0 +1,34 @@
+apiVersion: config.kwok.x-k8s.io/v1alpha1
+kind: KwokctlResource
+metadata:
+  name: node
+template: |
+  apiVersion: v1
+  kind: Node
+  metadata:
+    name: {{ .name }}
+    annotations:
+      kwok.x-k8s.io/node: fake
+      metrics.k8s.io/resource-metrics-path: /metrics/nodes/{{ .name }}/metrics/resource
+      node.alpha.kubernetes.io/ttl: "0"
+    labels:
+      beta.kubernetes.io/arch: amd64
+      beta.kubernetes.io/os: linux
+      kubernetes.io/arch: amd64
+      kubernetes.io/hostname: {{ .name }}
+      kubernetes.io/os: linux
+      kubernetes.io/role: agent
+      node-role.kubernetes.io/agent: ""
+      type: kwok
+  spec:
+    podCIDR: {{ AddCIDR .podCIDR .index }}
+    podCIDRs:
+    - {{ AddCIDR .podCIDR .index }}
+    - {{ AddCIDRIPv6 .podCIDRIPv6 .index }}
+    taints:
+    - effect: NoSchedule
+      key: kwok.x-k8s.io/node
+      value: fake
+    - effect: NoSchedule
+      key: readiness.k8s.io/NetworkReady
+      value: pending
