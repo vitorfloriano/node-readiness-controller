@@ -490,17 +490,29 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		}
 	}
 
+	var sortedHistograms []string
+	for name := range histograms {
+		sortedHistograms = append(sortedHistograms, name)
+	}
+	sort.Strings(sortedHistograms)
+
+	var sortedCounters []string
+	for name := range counters {
+		sortedCounters = append(sortedCounters, name)
+	}
+	sort.Strings(sortedCounters)
+
+	var sortedGauges []string
+	for name := range gauges {
+		sortedGauges = append(sortedGauges, name)
+	}
+	sort.Strings(sortedGauges)
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseTitle))
 
 	// Format Histograms
 	if len(histograms) > 0 {
-		var sortedHistograms []string
-		for name := range histograms {
-			sortedHistograms = append(sortedHistograms, name)
-		}
-		sort.Strings(sortedHistograms)
-
 		sb.WriteString("### Histograms (Latency & Durations)\n")
 		for _, name := range sortedHistograms {
 			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
@@ -545,12 +557,6 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 
 	// Format Counters
 	if len(counters) > 0 {
-		var sortedCounters []string
-		for name := range counters {
-			sortedCounters = append(sortedCounters, name)
-		}
-		sort.Strings(sortedCounters)
-
 		sb.WriteString("### Counters (Totals & Accumulations)\n")
 		for _, name := range sortedCounters {
 			increaseQuery := fmt.Sprintf("sum(increase(%s[%ds] @ %.3f))", name, lookbackSecs, ts)
@@ -570,12 +576,6 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 
 	// Format Gauges
 	if len(gauges) > 0 {
-		var sortedGauges []string
-		for name := range gauges {
-			sortedGauges = append(sortedGauges, name)
-		}
-		sort.Strings(sortedGauges)
-
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for _, name := range sortedGauges {
 			maxQuery := fmt.Sprintf("max_over_time(%s[%ds] @ %.3f)", name, lookbackSecs, ts)
