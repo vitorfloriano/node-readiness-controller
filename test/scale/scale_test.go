@@ -421,6 +421,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		Histograms:      make(map[string]HistogramVal),
 		Counters:        make(map[string]float64),
 		Gauges:          make(map[string]GaugeVal),
+		TimeSeries:      make(map[string][]TimeSeriesPoint),
 	}
 
 	// 1. Fetch metadata
