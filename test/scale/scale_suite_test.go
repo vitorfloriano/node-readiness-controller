@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,8 +29,9 @@ const (
 )
 
 var (
-	kwokctlBinaryPath string
-	controllerBinPath string
+	kwokctlBinaryPath        string
+	controllerBinPath        string
+	ControllerScrapeInterval = 5 * time.Second
 )
 
 //go:embed testdata/cni-readiness-rule.yaml
@@ -118,6 +120,8 @@ var _ = BeforeSuite(func() {
 		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
 	}
 
+	ControllerScrapeInterval = getScrapeInterval(newConfig)
+
 	// Verify Prometheus readiness explicitly before proceeding (Item 6)
 	Eventually(func(g Gomega) {
 		resp, err := http.Get("http://127.0.0.1:9090/-/ready")
@@ -170,4 +174,29 @@ func ensureKwokctl(version string, targetDir string) string {
 	Expect(err).NotTo(HaveOccurred(), "Failed to write binary content to disk target")
 
 	return localBinaryPath
+}
+
+func getScrapeInterval(configStr string) time.Duration {
+	lines := strings.Split(configStr, "\n")
+	inJob := false
+	for _, line := range lines {
+		if strings.Contains(line, "job_name: node-readiness-controller") {
+			inJob = true
+			continue
+		}
+		if inJob && strings.Contains(line, "scrape_interval:") {
+			parts := strings.Split(line, ":")
+			if len(parts) == 2 {
+				val := strings.TrimSpace(parts[1])
+				dur, err := time.ParseDuration(val)
+				if err == nil {
+					return dur
+				}
+			}
+		}
+		if inJob && strings.Contains(line, "job_name:") {
+			inJob = false
+		}
+	}
+	return 5 * time.Second
 }

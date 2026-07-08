@@ -222,8 +222,15 @@ var _ = AfterSuite(func() {
 	stopOutput, err := utils.Run(stopCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to stop kwok cluster:\n%s", stopOutput)
 
-	// Wait 2 seconds for Prometheus to shutdown completely
-	time.Sleep(2 * time.Second)
+	// Wait dynamically for Prometheus to shut down completely by verifying the port is closed
+	Eventually(func() error {
+		resp, err := http.Get("http://127.0.0.1:9090/-/ready")
+		if err != nil {
+			return nil // connection refused/closed - Prometheus is down!
+		}
+		resp.Body.Close()
+		return fmt.Errorf("Prometheus is still running")
+	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 
 	// 5. Tar the Prometheus TSDB directory
 	homeDir, err := os.UserHomeDir()
@@ -397,13 +404,18 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 
 
 func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (string, error) {
-	// Set evaluation time to phaseEnd + 5s to ensure the final scrape is included (Item 2)
-	evalTime := phaseEnd.Add(5 * time.Second)
+	// Set evaluation time dynamically based on the configured scrape interval to ensure the final scrape is included
+	evalTime := phaseEnd.Add(ControllerScrapeInterval)
 	lookbackSecs := int(evalTime.Sub(phaseStart).Seconds())
 	if lookbackSecs < 10 {
 		lookbackSecs = 10 // Ensure a minimum lookback of 10 seconds to include at least two scrapes
 	}
 	ts := float64(evalTime.UnixNano()) / 1e9
+
+	// Wait dynamically for Prometheus to actually perform the final scrape in real-world time before querying
+	if time.Now().Before(evalTime) {
+		time.Sleep(time.Until(evalTime))
+	}
 
 	// 1. Fetch metadata
 	metaResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/metadata")
