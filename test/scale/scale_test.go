@@ -206,7 +206,9 @@ var _ = AfterSuite(func() {
 	srcLogPath := filepath.Join(projectRootDir, "controller.log")
 	if _, err := os.Stat(srcLogPath); err == nil {
 		destLogPath := filepath.Join(artifactsDir, "controller.log")
-		_ = copyFile(srcLogPath, destLogPath)
+		if err := copyFile(srcLogPath, destLogPath); err == nil {
+			_ = os.Remove(srcLogPath)
+		}
 	}
 
 	// 4. Stop the kwok cluster to flush TSDB safely
