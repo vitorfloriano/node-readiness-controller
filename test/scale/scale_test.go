@@ -81,13 +81,27 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		logFile, errError = os.Create("controller.log")
 		Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
 
-		// Start the controller manager process
-		cmd = exec.Command(controllerBinPath,
+		// Start the controller manager process with optional PR 287 concurrency tuning flags
+		args := []string{
 			"--metrics-bind-address=:8080",
 			"--metrics-secure=false",
 			"--leader-elect=false",
 			"--enable-webhook=false",
-		)
+		}
+		if qps := os.Getenv("KUBE_API_QPS"); qps != "" {
+			args = append(args, "--kube-api-qps="+qps)
+		}
+		if burst := os.Getenv("KUBE_API_BURST"); burst != "" {
+			args = append(args, "--kube-api-burst="+burst)
+		}
+		if nodeConc := os.Getenv("NODE_CONCURRENT_RECONCILES"); nodeConc != "" {
+			args = append(args, "--node-concurrent-reconciles="+nodeConc)
+		}
+		if ruleConc := os.Getenv("RULE_CONCURRENT_RECONCILES"); ruleConc != "" {
+			args = append(args, "--rule-concurrent-reconciles="+ruleConc)
+		}
+
+		cmd = exec.Command(controllerBinPath, args...)
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
