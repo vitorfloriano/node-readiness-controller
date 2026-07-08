@@ -76,9 +76,21 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		clientset, err = kubernetes.NewForConfig(config)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create clientset")
 
-		// Create log file for the controller
+		// Resolve artifacts directory
+		projectRootDir, err := utils.GetProjectDir()
+		Expect(err).NotTo(HaveOccurred())
+
+		artifactsDir := os.Getenv("ARTIFACTS")
+		if artifactsDir == "" {
+			artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
+		}
+
+		err = os.MkdirAll(artifactsDir, 0755)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Create log file for the controller directly in the artifacts directory
 		var errError error
-		logFile, errError = os.Create("controller.log")
+		logFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log"))
 		Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
 
 		// Start the controller manager process with optional PR 287 concurrency tuning flags
@@ -202,14 +214,7 @@ var _ = AfterSuite(func() {
 	err = os.WriteFile(reportPath, []byte(reportContent), 0644)
 	Expect(err).NotTo(HaveOccurred())
 
-	// 3. Export Controller log file
-	srcLogPath := filepath.Join(projectRootDir, "controller.log")
-	if _, err := os.Stat(srcLogPath); err == nil {
-		destLogPath := filepath.Join(artifactsDir, "controller.log")
-		if err := copyFile(srcLogPath, destLogPath); err == nil {
-			_ = os.Remove(srcLogPath)
-		}
-	}
+
 
 	// 4. Stop the kwok cluster to flush TSDB safely
 	By("Stopping the kwokctl cluster to flush TSDB...")
@@ -563,19 +568,4 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 	return sb.String(), nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
 
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, in)
-	return err
-}
