@@ -606,17 +606,40 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			res.Gauges[name] = gaugeVal
 		}
 		sb.WriteString("\n")
+
+		// 4. Fetch TimeSeries range data for Grafana time-series graphs
+		for _, name := range sortedGauges {
+			points, errRange := queryPrometheusRange(ctx, name, phaseStart, evalTime, ControllerScrapeInterval)
+			if errRange == nil {
+				res.TimeSeries[name] = points
+			}
+		}
+		for _, name := range sortedCounters {
+			rateQuery := fmt.Sprintf("rate(%s[%s])", name, ControllerScrapeInterval.String())
+			points, errRange := queryPrometheusRange(ctx, rateQuery, phaseStart, evalTime, ControllerScrapeInterval)
+			if errRange == nil {
+				res.TimeSeries[name] = points
+			}
+		}
+		for _, name := range sortedHistograms {
+			p99RangeQuery := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[%s])) by (le))", name, ControllerScrapeInterval.String())
+			points, errRange := queryPrometheusRange(ctx, p99RangeQuery, phaseStart, evalTime, ControllerScrapeInterval)
+			if errRange == nil {
+				res.TimeSeries[name+"_p99"] = points
+			}
+		}
 	}
 
 	return res, sb.String(), nil
 }
 
 type QueryResult struct {
-	PhaseTitle      string                 `json:"phase_title"`
-	DurationSeconds float64                `json:"duration_seconds"`
-	Histograms      map[string]HistogramVal `json:"histograms"`
-	Counters        map[string]float64     `json:"counters"`
-	Gauges          map[string]GaugeVal    `json:"gauges"`
+	PhaseTitle      string                       `json:"phase_title"`
+	DurationSeconds float64                      `json:"duration_seconds"`
+	Histograms      map[string]HistogramVal      `json:"histograms"`
+	Counters        map[string]float64           `json:"counters"`
+	Gauges          map[string]GaugeVal          `json:"gauges"`
+	TimeSeries      map[string][]TimeSeriesPoint `json:"time_series"`
 }
 
 type HistogramVal struct {
@@ -630,12 +653,73 @@ type GaugeVal struct {
 	Avg float64 `json:"avg"`
 }
 
+type TimeSeriesPoint struct {
+	Timestamp float64 `json:"timestamp"`
+	Value     float64 `json:"value"`
+}
+
 func parseFloatSafe(s string) float64 {
 	val, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0.0
 	}
 	return val
+}
+
+func queryPrometheusRange(ctx context.Context, query string, start time.Time, end time.Time, step time.Duration) ([]TimeSeriesPoint, error) {
+	u, err := url.Parse("http://127.0.0.1:9090/api/v1/query_range")
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("query", query)
+	q.Set("start", fmt.Sprintf("%.3f", float64(start.UnixNano())/1e9))
+	q.Set("end", fmt.Sprintf("%.3f", float64(end.UnixNano())/1e9))
+	q.Set("step", step.String())
+	u.RawQuery = q.Encode()
+
+	resp, err := doGetRequest(ctx, u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var promResp struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Values [][]interface{} `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&promResp); err != nil {
+		return nil, err
+	}
+
+	if promResp.Status != "success" || len(promResp.Data.Result) == 0 {
+		return nil, fmt.Errorf("no data or query failed")
+	}
+
+	var points []TimeSeriesPoint
+	for _, valArr := range promResp.Data.Result[0].Values {
+		if len(valArr) < 2 {
+			continue
+		}
+		ts, ok1 := valArr[0].(float64)
+		valStr, ok2 := valArr[1].(string)
+		if ok1 && ok2 {
+			valNum, err := strconv.ParseFloat(valStr, 64)
+			if err == nil {
+				points = append(points, TimeSeriesPoint{
+					Timestamp: ts,
+					Value:     valNum,
+				})
+			}
+		}
+	}
+	return points, nil
 }
 
 
