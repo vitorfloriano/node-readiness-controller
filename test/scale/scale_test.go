@@ -49,7 +49,10 @@ type PhaseStats struct {
 	End   time.Time
 }
 
-var reports []string
+var (
+	reports      []string
+	queryResults []QueryResult
+)
 
 var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	var (
@@ -61,6 +64,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	BeforeEach(func() {
 		// Reset the mutable reports slice to prevent carryover state (Item 7)
 		reports = nil
+		queryResults = nil
 
 		// Resolve kubeconfig path
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -181,9 +185,10 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		}
 
 		for _, phase := range completedPhases {
-			report, err := collectAndReportMetricsForWindow(ctx, phase.Title, phase.Start, phase.End)
+			reportStruct, reportStr, err := collectAndReportMetricsForWindow(ctx, phase.Title, phase.Start, phase.End)
 			Expect(err).NotTo(HaveOccurred())
-			reports = append(reports, report)
+			reports = append(reports, reportStr)
+			queryResults = append(queryResults, reportStruct)
 		}
 	})
 })
@@ -214,10 +219,15 @@ var _ = AfterSuite(func() {
 	err = os.WriteFile(reportPath, []byte(reportContent), 0644)
 	Expect(err).NotTo(HaveOccurred())
 
+	// 3. Generate and write JSON Performance Report
+	jsonPath := filepath.Join(artifactsDir, "metrics.json")
+	jsonBytes, err := json.MarshalIndent(queryResults, "", "  ")
+	Expect(err).NotTo(HaveOccurred())
+	err = os.WriteFile(jsonPath, jsonBytes, 0644)
+	Expect(err).NotTo(HaveOccurred())
 
-
-	// 4. Stop the kwok cluster to flush TSDB safely
-	By("Stopping the kwokctl cluster to flush TSDB...")
+	// 4. Stop the kwok cluster cleanly
+	By("Stopping the kwokctl cluster...")
 	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok")
 	stopOutput, err := utils.Run(stopCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to stop kwok cluster:\n%s", stopOutput)
@@ -231,18 +241,6 @@ var _ = AfterSuite(func() {
 		resp.Body.Close()
 		return fmt.Errorf("Prometheus is still running")
 	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
-
-	// 5. Tar the Prometheus TSDB directory
-	homeDir, err := os.UserHomeDir()
-	Expect(err).NotTo(HaveOccurred())
-	prometheusDataDir := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "data")
-
-	if _, err := os.Stat(prometheusDataDir); err == nil {
-		tarPath := filepath.Join(artifactsDir, "prometheus_tsdb.tar.gz")
-		tarCmd := exec.Command("tar", "-czf", tarPath, "-C", prometheusDataDir, ".")
-		_, err = utils.Run(tarCmd)
-		Expect(err).NotTo(HaveOccurred())
-	}
 })
 
 func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
@@ -403,7 +401,7 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 
 
 
-func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (string, error) {
+func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (QueryResult, string, error) {
 	// Set evaluation time dynamically based on the configured scrape interval to ensure the final scrape is included
 	evalTime := phaseEnd.Add(ControllerScrapeInterval)
 	lookbackSecs := int(evalTime.Sub(phaseStart).Seconds())
@@ -417,28 +415,36 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		time.Sleep(time.Until(evalTime))
 	}
 
+	res := QueryResult{
+		PhaseTitle:      phaseTitle,
+		DurationSeconds: phaseEnd.Sub(phaseStart).Seconds(),
+		Histograms:      make(map[string]HistogramVal),
+		Counters:        make(map[string]float64),
+		Gauges:          make(map[string]GaugeVal),
+	}
+
 	// 1. Fetch metadata
 	metaResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/metadata")
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch metadata: %w", err)
+		return QueryResult{}, "", fmt.Errorf("failed to fetch metadata: %w", err)
 	}
 	defer metaResp.Body.Close()
 
 	var metadata MetadataResponse
 	if err := json.NewDecoder(metaResp.Body).Decode(&metadata); err != nil {
-		return "", fmt.Errorf("failed to decode metadata: %w", err)
+		return QueryResult{}, "", fmt.Errorf("failed to decode metadata: %w", err)
 	}
 
 	// 2. Fetch active series
 	seriesResp, err := doGetRequest(ctx, "http://127.0.0.1:9090/api/v1/query?query={job=\"node-readiness-controller\"}")
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch series: %w", err)
+		return QueryResult{}, "", fmt.Errorf("failed to fetch series: %w", err)
 	}
 	defer seriesResp.Body.Close()
 
 	var series QueryResponse
 	if err := json.NewDecoder(seriesResp.Body).Decode(&series); err != nil {
-		return "", fmt.Errorf("failed to decode series: %w", err)
+		return QueryResult{}, "", fmt.Errorf("failed to decode series: %w", err)
 	}
 
 	// 3. Deduplicate and categorize metrics
@@ -521,6 +527,18 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			} else {
 				sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: %s s\n", p99))
 			}
+
+			var histVal HistogramVal
+			if err50 == nil {
+				histVal.P50 = parseFloatSafe(p50)
+			}
+			if err90 == nil {
+				histVal.P90 = parseFloatSafe(p90)
+			}
+			if err99 == nil {
+				histVal.P99 = parseFloatSafe(p99)
+			}
+			res.Histograms[name] = histVal
 		}
 		sb.WriteString("\n")
 	}
@@ -541,6 +559,10 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **N/A (Error: %v)**\n", name, lookbackSecs, errInc))
 			} else {
 				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **%s**\n", name, lookbackSecs, inc))
+			}
+
+			if errInc == nil {
+				res.Counters[name] = parseFloatSafe(inc)
 			}
 		}
 		sb.WriteString("\n")
@@ -573,11 +595,47 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			} else {
 				sb.WriteString(fmt.Sprintf("    *   **Average**: %s\n", avgVal))
 			}
+
+			var gaugeVal GaugeVal
+			if errMax == nil {
+				gaugeVal.Max = parseFloatSafe(maxVal)
+			}
+			if errAvg == nil {
+				gaugeVal.Avg = parseFloatSafe(avgVal)
+			}
+			res.Gauges[name] = gaugeVal
 		}
 		sb.WriteString("\n")
 	}
 
-	return sb.String(), nil
+	return res, sb.String(), nil
+}
+
+type QueryResult struct {
+	PhaseTitle      string                 `json:"phase_title"`
+	DurationSeconds float64                `json:"duration_seconds"`
+	Histograms      map[string]HistogramVal `json:"histograms"`
+	Counters        map[string]float64     `json:"counters"`
+	Gauges          map[string]GaugeVal    `json:"gauges"`
+}
+
+type HistogramVal struct {
+	P50 float64 `json:"p50"`
+	P90 float64 `json:"p90"`
+	P99 float64 `json:"p99"`
+}
+
+type GaugeVal struct {
+	Max float64 `json:"max"`
+	Avg float64 `json:"avg"`
+}
+
+func parseFloatSafe(s string) float64 {
+	val, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0.0
+	}
+	return val
 }
 
 
