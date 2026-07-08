@@ -241,6 +241,18 @@ var _ = AfterSuite(func() {
 		resp.Body.Close()
 		return fmt.Errorf("Prometheus is still running")
 	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
+
+	// 5. Tar the Prometheus TSDB directory
+	homeDir, err := os.UserHomeDir()
+	Expect(err).NotTo(HaveOccurred())
+	prometheusDataDir := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "data")
+
+	if _, err := os.Stat(prometheusDataDir); err == nil {
+		tarPath := filepath.Join(artifactsDir, "prometheus_tsdb.tar.gz")
+		tarCmd := exec.Command("tar", "-czf", tarPath, "-C", prometheusDataDir, ".")
+		_, err = utils.Run(tarCmd)
+		Expect(err).NotTo(HaveOccurred())
+	}
 })
 
 func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
