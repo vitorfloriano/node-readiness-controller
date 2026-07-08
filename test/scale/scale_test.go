@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -662,6 +662,9 @@ type TimeSeriesPoint struct {
 func parseFloatSafe(s string) float64 {
 	val, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		return 0.0
+	}
+	if math.IsNaN(val) || math.IsInf(val, 0) {
 		return 0.0
 	}
 	return val
