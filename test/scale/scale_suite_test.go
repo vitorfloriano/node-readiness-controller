@@ -35,8 +35,7 @@ var (
 //go:embed testdata/cni-readiness-rule.yaml
 var cniReadinessRuleManifest string
 
-//go:embed testdata/cni-readiness-stage-initial.yaml
-var cniReadinessStageInitialManifest string
+
 
 var _ = BeforeSuite(func() {
 
