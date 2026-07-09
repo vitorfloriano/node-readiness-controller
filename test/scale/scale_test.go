@@ -590,8 +590,8 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 	if len(gauges) > 0 {
 		sb.WriteString("### Gauges (State & Memory/CPU Quantities)\n")
 		for _, name := range sortedGauges {
-			maxQuery := fmt.Sprintf("max_over_time(%s[%ds] @ %.3f)", name, lookbackSecs, ts)
-			avgQuery := fmt.Sprintf("avg_over_time(%s[%ds] @ %.3f)", name, lookbackSecs, ts)
+			maxQuery := fmt.Sprintf("max(max_over_time(%s[%ds] @ %.3f))", name, lookbackSecs, ts)
+			avgQuery := fmt.Sprintf("avg(avg_over_time(%s[%ds] @ %.3f))", name, lookbackSecs, ts)
 
 			maxVal, errMax := queryPrometheusInstant(ctx, maxQuery)
 			avgVal, errAvg := queryPrometheusInstant(ctx, avgQuery)
@@ -621,13 +621,14 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 
 		// 4. Fetch TimeSeries range data for Grafana time-series graphs
 		for _, name := range sortedGauges {
-			points, errRange := queryPrometheusRange(ctx, name, phaseStart, evalTime, ControllerScrapeInterval)
+			maxQuery := fmt.Sprintf("max(%s)", name)
+			points, errRange := queryPrometheusRange(ctx, maxQuery, phaseStart, evalTime, ControllerScrapeInterval)
 			if errRange == nil {
 				res.TimeSeries[name] = points
 			}
 		}
 		for _, name := range sortedCounters {
-			rateQuery := fmt.Sprintf("rate(%s[%s])", name, ControllerScrapeInterval.String())
+			rateQuery := fmt.Sprintf("sum(rate(%s[%s]))", name, ControllerScrapeInterval.String())
 			points, errRange := queryPrometheusRange(ctx, rateQuery, phaseStart, evalTime, ControllerScrapeInterval)
 			if errRange == nil {
 				res.TimeSeries[name] = points
