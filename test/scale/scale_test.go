@@ -460,6 +460,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 
 	// 3. Deduplicate and categorize metrics
 	histograms := make(map[string]bool)
+	summaries := make(map[string]bool)
 	counters := make(map[string]bool)
 	gauges := make(map[string]bool)
 
@@ -469,25 +470,42 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			continue
 		}
 
-		// Check if it's a histogram suffix
+		// Check if it's a histogram or summary suffix
 		baseName := name
 		isHist := false
+		isSummary := false
 		switch {
 		case strings.HasSuffix(name, "_bucket"):
 			baseName = strings.TrimSuffix(name, "_bucket")
 			isHist = true
 		case strings.HasSuffix(name, "_sum"):
 			baseName = strings.TrimSuffix(name, "_sum")
-			isHist = true
+			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 {
+				switch meta[0].Type {
+				case "histogram":
+					isHist = true
+				case "summary":
+					isSummary = true
+				}
+			}
 		case strings.HasSuffix(name, "_count"):
 			baseName = strings.TrimSuffix(name, "_count")
-			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 && meta[0].Type == "histogram" {
-				isHist = true
+			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 {
+				switch meta[0].Type {
+				case "histogram":
+					isHist = true
+				case "summary":
+					isSummary = true
+				}
 			}
 		}
 
 		if isHist {
 			histograms[baseName] = true
+			continue
+		}
+		if isSummary {
+			summaries[baseName] = true
 			continue
 		}
 
@@ -498,6 +516,8 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 				counters[name] = true
 			case "gauge":
 				gauges[name] = true
+			case "summary":
+				summaries[name] = true
 			}
 		}
 	}
@@ -507,6 +527,12 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		sortedHistograms = append(sortedHistograms, name)
 	}
 	sort.Strings(sortedHistograms)
+
+	var sortedSummaries []string
+	for name := range summaries {
+		sortedSummaries = append(sortedSummaries, name)
+	}
+	sort.Strings(sortedSummaries)
 
 	var sortedCounters []string
 	for name := range counters {
@@ -530,6 +556,50 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			p50Query := fmt.Sprintf("histogram_quantile(0.50, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
 			p90Query := fmt.Sprintf("histogram_quantile(0.90, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
 			p99Query := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[%ds] @ %.3f)) by (le))", name, lookbackSecs, ts)
+
+			p50, err50 := queryPrometheusInstant(ctx, p50Query)
+			p90, err90 := queryPrometheusInstant(ctx, p90Query)
+			p99, err99 := queryPrometheusInstant(ctx, p99Query)
+
+			_, _ = fmt.Fprintf(&sb, "*   `%s`:\n", name)
+			if err50 != nil {
+				_, _ = fmt.Fprintf(&sb, "    *   **P50 (Median)**: N/A (Error: %v)\n", err50)
+			} else {
+				_, _ = fmt.Fprintf(&sb, "    *   **P50 (Median)**: %s s\n", p50)
+			}
+			if err90 != nil {
+				_, _ = fmt.Fprintf(&sb, "    *   **P90**: N/A (Error: %v)\n", err90)
+			} else {
+				_, _ = fmt.Fprintf(&sb, "    *   **P90**: %s s\n", p90)
+			}
+			if err99 != nil {
+				_, _ = fmt.Fprintf(&sb, "    *   **P99 (Tail)**: N/A (Error: %v)\n", err99)
+			} else {
+				_, _ = fmt.Fprintf(&sb, "    *   **P99 (Tail)**: %s s\n", p99)
+			}
+
+			var histVal HistogramVal
+			if err50 == nil {
+				histVal.P50 = parseFloatSafe(p50)
+			}
+			if err90 == nil {
+				histVal.P90 = parseFloatSafe(p90)
+			}
+			if err99 == nil {
+				histVal.P99 = parseFloatSafe(p99)
+			}
+			res.Histograms[name] = histVal
+		}
+		sb.WriteString("\n")
+	}
+
+	// Format Summaries
+	if len(summaries) > 0 {
+		sb.WriteString("### Summaries (Pre-calculated Latency Quantiles)\n")
+		for _, name := range sortedSummaries {
+			p50Query := fmt.Sprintf("max(max_over_time(%s{quantile=\"0.5\"}[%ds] @ %.3f))", name, lookbackSecs, ts)
+			p90Query := fmt.Sprintf("max(max_over_time(%s{quantile=\"0.9\"}[%ds] @ %.3f))", name, lookbackSecs, ts)
+			p99Query := fmt.Sprintf("max(max_over_time(%s{quantile=\"0.99\"}[%ds] @ %.3f))", name, lookbackSecs, ts)
 
 			p50, err50 := queryPrometheusInstant(ctx, p50Query)
 			p90, err90 := queryPrometheusInstant(ctx, p90Query)
@@ -636,6 +706,13 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		}
 		for _, name := range sortedHistograms {
 			p99RangeQuery := fmt.Sprintf("histogram_quantile(0.99, sum(rate(%s_bucket[%s])) by (le))", name, ControllerScrapeInterval.String())
+			points, errRange := queryPrometheusRange(ctx, p99RangeQuery, phaseStart, evalTime, ControllerScrapeInterval)
+			if errRange == nil {
+				res.TimeSeries[name+"_p99"] = points
+			}
+		}
+		for _, name := range sortedSummaries {
+			p99RangeQuery := fmt.Sprintf("max(%s{quantile=\"0.99\"})", name)
 			points, errRange := queryPrometheusRange(ctx, p99RangeQuery, phaseStart, evalTime, ControllerScrapeInterval)
 			if errRange == nil {
 				res.TimeSeries[name+"_p99"] = points
