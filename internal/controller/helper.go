@@ -29,7 +29,7 @@ const (
 	// ~36 chars), which is immutable for the object's lifetime and globally unique.
 	//
 	// Full key format: readiness.k8s.io/bootstrap-completed-<ruleUID>
-	// Value format:    {"rule-name":"<ruleName>"}   (for human readability)
+	// Value format:    {"rule-name":"<ruleName>"}   (for human readability).
 	bootstrapAnnotationPrefix = "readiness.k8s.io/bootstrap-completed-"
 )
 
@@ -51,8 +51,6 @@ func bootstrapAnnotationValue(ruleName string) string {
 	}
 	return string(b)
 }
-
-
 
 // legacyBootstrapAnnotationKey returns the old-format annotation key used
 // before the UID migration: readiness.k8s.io/bootstrap-completed-<ruleName>.
