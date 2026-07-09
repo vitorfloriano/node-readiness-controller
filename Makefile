@@ -433,6 +433,36 @@ setup-envtest: $(SETUP_ENVTEST) ## Download the binaries required for ENVTEST in
 	@echo KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS)
 
 ## --------------------------------------
+## Scale Testing
+## --------------------------------------
+
+##@ scale:
+
+.PHONY: test-scale
+test-scale: manifests generate ## Run the scale performance tests. Supported parameters: SCALE_SIZE, NODE_COUNT, NODE_CONCURRENT_RECONCILES, RULE_CONCURRENT_RECONCILES, KUBE_API_QPS, KUBE_API_BURST, DISABLE_QPS_LIMITS, NODE_LEASE_DURATION_SECONDS, ARTIFACTS, KUBECONFIG
+	go test -v ./test/scale/... -ginkgo.v -timeout 30m -count=1
+
+.PHONY: test-scale-xs
+test-scale-xs: ## Run scale tests in Extra Small mode (50 nodes).
+	$(MAKE) test-scale SCALE_SIZE=XS
+
+.PHONY: test-scale-small
+test-scale-small: ## Run scale tests in Small mode (50, 100 nodes).
+	$(MAKE) test-scale SCALE_SIZE=S
+
+.PHONY: test-scale-medium
+test-scale-medium: ## Run scale tests in Medium mode (50, 100, 500 nodes).
+	$(MAKE) test-scale SCALE_SIZE=M
+
+.PHONY: test-scale-large
+test-scale-large: ## Run scale tests in Large mode (50, 100, 500, 1000 nodes).
+	$(MAKE) test-scale SCALE_SIZE=L
+
+.PHONY: test-scale-1000
+test-scale-1000: ## Run a tuned 1000-node high-scale performance test.
+	$(MAKE) test-scale NODE_COUNT=1000 NODE_CONCURRENT_RECONCILES=50 KUBE_API_QPS=500 KUBE_API_BURST=1000 DISABLE_QPS_LIMITS=true NODE_LEASE_DURATION_SECONDS=400
+
+## --------------------------------------
 ## Hack / Tools
 ## --------------------------------------
 
