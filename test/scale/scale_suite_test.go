@@ -49,6 +49,13 @@ var _ = BeforeSuite(func() {
 	// Clean up any existing cluster first to ensure we start fresh
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
+	// Clean up any stale controller processes running on the host
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/IM", "node-readiness-controller.exe", "/F").Run()
+	} else {
+		_ = exec.Command("pkill", "-f", "node-readiness-controller").Run()
+	}
+
 	kwokConfigPath := filepath.Join(projectRootDir, "test", "scale", "testdata", "kwokctl-config.yaml")
 	createArgs := []string{
 		"create", "cluster",
