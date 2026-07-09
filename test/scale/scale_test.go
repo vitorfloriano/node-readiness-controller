@@ -697,7 +697,7 @@ func queryPrometheusRange(ctx context.Context, query string, start time.Time, en
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var promResp struct {
 		Status string `json:"status"`

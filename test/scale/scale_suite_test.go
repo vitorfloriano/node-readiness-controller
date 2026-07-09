@@ -1,6 +1,7 @@
 package scale_test
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"io"
@@ -37,8 +38,6 @@ var (
 //go:embed testdata/cni-readiness-rule.yaml
 var cniReadinessRuleManifest string
 
-
-
 var _ = BeforeSuite(func() {
 
 	projectRootDir, err := utils.GetProjectDir()
@@ -71,7 +70,7 @@ var _ = BeforeSuite(func() {
 		createArgs = append(createArgs, "--node-lease-duration-seconds", leaseSecs)
 	}
 
-	createCmd := exec.Command(kwokctlBinaryPath, createArgs...)
+	createCmd := exec.Command(kwokctlBinaryPath, createArgs...) // #nosec G204
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
 
@@ -79,10 +78,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve user home directory")
 
 	kwokKubeconfig := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "kubeconfig.yaml")
-	os.Setenv("KUBECONFIG", kwokKubeconfig)
+	_ = os.Setenv("KUBECONFIG", kwokKubeconfig)
 
 	crdConfigPath := filepath.Join(projectRootDir, "config", "crd")
-	crdCmd := exec.Command("kubectl", "apply", "-k", crdConfigPath)
+	crdCmd := exec.Command("kubectl", "apply", "-k", crdConfigPath) // #nosec G204
 	crdOutput, err := utils.Run(crdCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply NodeReadinessRule CRD via Kustomize:\n%s", crdOutput)
 
@@ -93,13 +92,13 @@ var _ = BeforeSuite(func() {
 	controllerBinPath = filepath.Join(toolsBinDir, controllerBinName)
 	controllerMainPath := filepath.Join(".", "cmd", "main.go")
 
-	buildCmd := exec.Command("go", "build", "-o", controllerBinPath, controllerMainPath)
+	buildCmd := exec.Command("go", "build", "-o", controllerBinPath, controllerMainPath) // #nosec G204
 	buildOutput, err := utils.Run(buildCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to compile controller manager:\n%s", buildOutput)
 
 	prometheusConfigPath := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "prometheus.yaml")
 
-	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath)
+	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath) // #nosec G304
 	Expect(err).NotTo(HaveOccurred())
 
 	newConfig := string(prometheusConfigBytes)
@@ -121,7 +120,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	if modified {
-		err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0644)
+		err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0600)
 		Expect(err).NotTo(HaveOccurred())
 
 		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
@@ -157,25 +156,26 @@ func ensureKwokctl(version string, targetDir string) string {
 		return localBinaryPath
 	}
 
-	err := os.MkdirAll(targetDir, 0755)
+	err := os.MkdirAll(targetDir, 0750)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create tools directory structure")
-
 	downloadURL := fmt.Sprintf(
 		"https://github.com/kubernetes-sigs/kwok/releases/download/%s/kwokctl-%s-%s",
 		version, goOS, goArch,
 	)
 
-	resp, err := http.Get(downloadURL)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create download request")
+	resp, err := http.DefaultClient.Do(req) // #nosec G107
 	Expect(err).NotTo(HaveOccurred(), "Failed to initiate kwokctl binary download")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		Fail(fmt.Sprintf("Failed to download kwokctl from URL %s: Status %s", downloadURL, resp.Status))
 	}
 
-	out, err := os.OpenFile(localBinaryPath, os.O_CREATE|os.O_WRONLY, 0755)
+	out, err := os.OpenFile(localBinaryPath, os.O_CREATE|os.O_WRONLY, 0700) // #nosec G304
 	Expect(err).NotTo(HaveOccurred(), "Failed to create local binary destination file")
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, resp.Body)
 	Expect(err).NotTo(HaveOccurred(), "Failed to write binary content to disk target")
