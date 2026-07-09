@@ -52,3 +52,5 @@ func TestLegacyBootstrapAnnotationKey(t *testing.T) {
 	key := legacyBootstrapAnnotationKey("my-rule")
 	g.Expect(key).To(Equal("readiness.k8s.io/bootstrap-completed-my-rule"))
 }
+
+
