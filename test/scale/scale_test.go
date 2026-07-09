@@ -89,12 +89,12 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
 		}
 
-		err = os.MkdirAll(artifactsDir, 0755)
+		err = os.MkdirAll(artifactsDir, 0750)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Create log file for the controller directly in the artifacts directory
 		var errError error
-		logFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log"))
+		logFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log")) // #nosec G304
 		Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
 
 		// Start the controller manager process with optional PR 287 concurrency tuning flags
@@ -140,7 +140,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			_ = cmd.Wait()
 		}
 		if logFile != nil {
-			logFile.Close()
+			_ = logFile.Close()
 		}
 
 		// Clean up simulated nodes
@@ -179,7 +179,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		}
 
 		By(fmt.Sprintf("Running scale test with phases: %v", phases))
-		var completedPhases []PhaseStats
+		completedPhases := make([]PhaseStats, 0, len(phases)*2)
 		for _, count := range phases {
 			completedPhases = append(completedPhases, runScalePhase(ctx, clientset, count)...)
 		}
@@ -203,7 +203,7 @@ var _ = AfterSuite(func() {
 		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
 	}
 
-	err = os.MkdirAll(artifactsDir, 0755)
+	err = os.MkdirAll(artifactsDir, 0750)
 	Expect(err).NotTo(HaveOccurred())
 
 	// 2. Generate and write Markdown Performance Report
@@ -216,19 +216,19 @@ var _ = AfterSuite(func() {
 	reportContent := sb.String()
 
 	reportPath := filepath.Join(artifactsDir, "performance_report.md")
-	err = os.WriteFile(reportPath, []byte(reportContent), 0644)
+	err = os.WriteFile(reportPath, []byte(reportContent), 0600)
 	Expect(err).NotTo(HaveOccurred())
 
 	// 3. Generate and write JSON Performance Report
 	jsonPath := filepath.Join(artifactsDir, "metrics.json")
 	jsonBytes, err := json.MarshalIndent(queryResults, "", "  ")
 	Expect(err).NotTo(HaveOccurred())
-	err = os.WriteFile(jsonPath, jsonBytes, 0644)
+	err = os.WriteFile(jsonPath, jsonBytes, 0600)
 	Expect(err).NotTo(HaveOccurred())
 
 	// 4. Stop the kwok cluster cleanly
 	By("Stopping the kwokctl cluster...")
-	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok")
+	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok") // #nosec G204
 	stopOutput, err := utils.Run(stopCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to stop kwok cluster:\n%s", stopOutput)
 
@@ -238,7 +238,7 @@ var _ = AfterSuite(func() {
 		if err != nil {
 			return nil // connection refused/closed - Prometheus is down!
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return fmt.Errorf("Prometheus is still running")
 	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 
@@ -249,7 +249,7 @@ var _ = AfterSuite(func() {
 
 	if _, err := os.Stat(prometheusDataDir); err == nil {
 		tarPath := filepath.Join(artifactsDir, "prometheus_tsdb.tar.gz")
-		tarCmd := exec.Command("tar", "-czf", tarPath, "-C", prometheusDataDir, ".")
+		tarCmd := exec.Command("tar", "-czf", tarPath, "-C", prometheusDataDir, ".") // #nosec G204
 		_, err = utils.Run(tarCmd)
 		Expect(err).NotTo(HaveOccurred())
 	}
@@ -280,7 +280,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	Expect(err).NotTo(HaveOccurred())
 
 	// 1. Scale using kwokctl
-	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node",
+	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node", // #nosec G204
 		"--replicas", strconv.Itoa(targetReplicas),
 		"--name", "kwok")
 	scaleOutput, err := utils.Run(scaleCmd)
@@ -303,7 +303,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	removeStart := time.Now()
 
 	trueStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-true.yaml")
-	applyTrueCmd := exec.Command("kubectl", "apply", "-f", trueStagePath)
+	applyTrueCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", trueStagePath) // #nosec G204
 	trueOutput, err := utils.Run(applyTrueCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply true stage: %s", trueOutput)
 
@@ -317,7 +317,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	removeDuration := removeEnd.Sub(removeStart)
 
 	// Clean up the True stage
-	deleteTrueCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-true", "--ignore-not-found")
+	deleteTrueCmd := exec.CommandContext(ctx, "kubectl", "delete", "stage", "calico-readiness-stage-true", "--ignore-not-found") // #nosec G204
 	_, err = utils.Run(deleteTrueCmd)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -334,7 +334,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	addStart := time.Now()
 
 	falseStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-false.yaml")
-	applyFalseCmd := exec.Command("kubectl", "apply", "-f", falseStagePath)
+	applyFalseCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", falseStagePath) // #nosec G204
 	falseOutput, err := utils.Run(applyFalseCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply false stage: %s", falseOutput)
 
@@ -348,7 +348,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	addDuration := addEnd.Sub(addStart)
 
 	// Clean up the False stage
-	deleteFalseCmd := exec.Command("kubectl", "delete", "stage", "calico-readiness-stage-false", "--ignore-not-found")
+	deleteFalseCmd := exec.CommandContext(ctx, "kubectl", "delete", "stage", "calico-readiness-stage-false", "--ignore-not-found") // #nosec G204
 	_, err = utils.Run(deleteFalseCmd)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -363,7 +363,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 
 func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
@@ -411,8 +411,6 @@ func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
 	return valStr, nil
 }
 
-
-
 func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (QueryResult, string, error) {
 	// Set evaluation time dynamically based on the configured scrape interval to ensure the final scrape is included
 	evalTime := phaseEnd.Add(ControllerScrapeInterval)
@@ -441,7 +439,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 	if err != nil {
 		return QueryResult{}, "", fmt.Errorf("failed to fetch metadata: %w", err)
 	}
-	defer metaResp.Body.Close()
+	defer func() { _ = metaResp.Body.Close() }()
 
 	var metadata MetadataResponse
 	if err := json.NewDecoder(metaResp.Body).Decode(&metadata); err != nil {
@@ -453,7 +451,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 	if err != nil {
 		return QueryResult{}, "", fmt.Errorf("failed to fetch series: %w", err)
 	}
-	defer seriesResp.Body.Close()
+	defer func() { _ = seriesResp.Body.Close() }()
 
 	var series QueryResponse
 	if err := json.NewDecoder(seriesResp.Body).Decode(&series); err != nil {
@@ -474,13 +472,14 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		// Check if it's a histogram suffix
 		baseName := name
 		isHist := false
-		if strings.HasSuffix(name, "_bucket") {
+		switch {
+		case strings.HasSuffix(name, "_bucket"):
 			baseName = strings.TrimSuffix(name, "_bucket")
 			isHist = true
-		} else if strings.HasSuffix(name, "_sum") {
+		case strings.HasSuffix(name, "_sum"):
 			baseName = strings.TrimSuffix(name, "_sum")
 			isHist = true
-		} else if strings.HasSuffix(name, "_count") {
+		case strings.HasSuffix(name, "_count"):
 			baseName = strings.TrimSuffix(name, "_count")
 			if meta, ok := metadata.Data[baseName]; ok && len(meta) > 0 && meta[0].Type == "histogram" {
 				isHist = true
@@ -522,7 +521,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 	sort.Strings(sortedGauges)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Performance Report: %s\n\n", phaseTitle))
+	_, _ = fmt.Fprintf(&sb, "## Performance Report: %s\n\n", phaseTitle)
 
 	// Format Histograms
 	if len(histograms) > 0 {
@@ -536,21 +535,21 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			p90, err90 := queryPrometheusInstant(ctx, p90Query)
 			p99, err99 := queryPrometheusInstant(ctx, p99Query)
 
-			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
+			_, _ = fmt.Fprintf(&sb, "*   `%s`:\n", name)
 			if err50 != nil {
-				sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: N/A (Error: %v)\n", err50))
+				_, _ = fmt.Fprintf(&sb, "    *   **P50 (Median)**: N/A (Error: %v)\n", err50)
 			} else {
-				sb.WriteString(fmt.Sprintf("    *   **P50 (Median)**: %s s\n", p50))
+				_, _ = fmt.Fprintf(&sb, "    *   **P50 (Median)**: %s s\n", p50)
 			}
 			if err90 != nil {
-				sb.WriteString(fmt.Sprintf("    *   **P90**: N/A (Error: %v)\n", err90))
+				_, _ = fmt.Fprintf(&sb, "    *   **P90**: N/A (Error: %v)\n", err90)
 			} else {
-				sb.WriteString(fmt.Sprintf("    *   **P90**: %s s\n", p90))
+				_, _ = fmt.Fprintf(&sb, "    *   **P90**: %s s\n", p90)
 			}
 			if err99 != nil {
-				sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: N/A (Error: %v)\n", err99))
+				_, _ = fmt.Fprintf(&sb, "    *   **P99 (Tail)**: N/A (Error: %v)\n", err99)
 			} else {
-				sb.WriteString(fmt.Sprintf("    *   **P99 (Tail)**: %s s\n", p99))
+				_, _ = fmt.Fprintf(&sb, "    *   **P99 (Tail)**: %s s\n", p99)
 			}
 
 			var histVal HistogramVal
@@ -575,9 +574,9 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			increaseQuery := fmt.Sprintf("sum(increase(%s[%ds] @ %.3f))", name, lookbackSecs, ts)
 			inc, errInc := queryPrometheusInstant(ctx, increaseQuery)
 			if errInc != nil {
-				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **N/A (Error: %v)**\n", name, lookbackSecs, errInc))
+				_, _ = fmt.Fprintf(&sb, "*   `%s` (Total Increase in %ds): **N/A (Error: %v)**\n", name, lookbackSecs, errInc)
 			} else {
-				sb.WriteString(fmt.Sprintf("*   `%s` (Total Increase in %ds): **%s**\n", name, lookbackSecs, inc))
+				_, _ = fmt.Fprintf(&sb, "*   `%s` (Total Increase in %ds): **%s**\n", name, lookbackSecs, inc)
 			}
 
 			if errInc == nil {
@@ -597,16 +596,16 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 			maxVal, errMax := queryPrometheusInstant(ctx, maxQuery)
 			avgVal, errAvg := queryPrometheusInstant(ctx, avgQuery)
 
-			sb.WriteString(fmt.Sprintf("*   `%s`:\n", name))
+			_, _ = fmt.Fprintf(&sb, "*   `%s`:\n", name)
 			if errMax != nil {
-				sb.WriteString(fmt.Sprintf("    *   **Max Peak**: N/A (Error: %v)\n", errMax))
+				_, _ = fmt.Fprintf(&sb, "    *   **Max Peak**: N/A (Error: %v)\n", errMax)
 			} else {
-				sb.WriteString(fmt.Sprintf("    *   **Max Peak**: %s\n", maxVal))
+				_, _ = fmt.Fprintf(&sb, "    *   **Max Peak**: %s\n", maxVal)
 			}
 			if errAvg != nil {
-				sb.WriteString(fmt.Sprintf("    *   **Average**: N/A (Error: %v)\n", errAvg))
+				_, _ = fmt.Fprintf(&sb, "    *   **Average**: N/A (Error: %v)\n", errAvg)
 			} else {
-				sb.WriteString(fmt.Sprintf("    *   **Average**: %s\n", avgVal))
+				_, _ = fmt.Fprintf(&sb, "    *   **Average**: %s\n", avgVal)
 			}
 
 			var gaugeVal GaugeVal
@@ -737,5 +736,3 @@ func queryPrometheusRange(ctx context.Context, query string, start time.Time, en
 	}
 	return points, nil
 }
-
-
