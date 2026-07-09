@@ -280,7 +280,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	Expect(err).NotTo(HaveOccurred())
 
 	// 1. Scale using kwokctl
-	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node", // #nosec G204 G702
+	scaleCmd := exec.CommandContext(ctx, kwokctlBinaryPath, "scale", "node", // #nosec G204 G702
 		"--replicas", strconv.Itoa(targetReplicas),
 		"--name", "kwok")
 	scaleOutput, err := utils.Run(scaleCmd)
