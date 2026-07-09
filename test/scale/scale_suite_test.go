@@ -173,7 +173,7 @@ func ensureKwokctl(version string, targetDir string) string {
 		Fail(fmt.Sprintf("Failed to download kwokctl from URL %s: Status %s", downloadURL, resp.Status))
 	}
 
-	out, err := os.OpenFile(localBinaryPath, os.O_CREATE|os.O_WRONLY, 0700) // #nosec G304
+	out, err := os.OpenFile(localBinaryPath, os.O_CREATE|os.O_WRONLY, 0700) // #nosec G304 G302
 	Expect(err).NotTo(HaveOccurred(), "Failed to create local binary destination file")
 	defer func() { _ = out.Close() }()
 
