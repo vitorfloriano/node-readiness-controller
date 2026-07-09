@@ -1,3 +1,5 @@
+//go:build scale
+
 /*
 Copyright The Kubernetes Authors.
 
