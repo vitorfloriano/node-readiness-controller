@@ -98,6 +98,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
 
 		// Start the controller manager process with optional PR 287 concurrency tuning flags
+		By("Starting the node-readiness-controller manager daemon process")
 		args := []string{
 			"--metrics-bind-address=:8080",
 			"--metrics-secure=false",
@@ -126,6 +127,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to start controller process")
 
 		// Wait for the controller metrics to be ready
+		By("Waiting for the controller metrics endpoint to be responsive")
 		Eventually(func(g Gomega) {
 			resp, err := http.Get("http://127.0.0.1:8080/metrics")
 			g.Expect(err).NotTo(HaveOccurred())
@@ -135,6 +137,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 
 	AfterEach(func() {
 		// Kill the controller process
+		By("Terminating the background controller process")
 		if cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
@@ -207,6 +210,7 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// 2. Generate and write Markdown Performance Report
+	By("Writing Markdown performance report and metrics JSON artifacts")
 	var sb strings.Builder
 	sb.WriteString("# Node Readiness Controller Scale Test Performance Report\n\n")
 	for _, r := range reports {
@@ -243,6 +247,7 @@ var _ = AfterSuite(func() {
 	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 
 	// 5. Tar the Prometheus TSDB directory
+	By("Archiving Prometheus TSDB directory")
 	homeDir, err := os.UserHomeDir()
 	Expect(err).NotTo(HaveOccurred())
 	prometheusDataDir := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "data")
@@ -291,6 +296,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
+		By(fmt.Sprintf("Progress: %d/%d nodes initialized with pending taints", count, targetReplicas))
 		return count
 	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas")
 
@@ -299,7 +305,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	// ----------------------------------------------------
 	// 2. Untaint (Removal) Phase
 	// ----------------------------------------------------
-	By("Applying calico-readiness-stage-true to remove taints")
+	By("Applying calico-readiness-stage-true stage rules to simulate CNI readiness")
 	removeStart := time.Now()
 
 	trueStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-true.yaml")
@@ -307,9 +313,11 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	trueOutput, err := utils.Run(applyTrueCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply true stage: %s", trueOutput)
 
+	By("Waiting for the controller manager to reconcile and remove taints from all nodes")
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
+		By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted", count, targetReplicas))
 		return count
 	}, "15m", "1s").Should(Equal(0), "Tainted nodes count did not drop to 0")
 
@@ -330,7 +338,7 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	// ----------------------------------------------------
 	// 3. Retaint (Add) Phase
 	// ----------------------------------------------------
-	By("Applying calico-readiness-stage-false to add taints again")
+	By("Applying calico-readiness-stage-false stage rules to simulate CNI loss")
 	addStart := time.Now()
 
 	falseStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "cni-readiness-stage-false.yaml")
@@ -338,9 +346,11 @@ func runScalePhase(ctx context.Context, clientset *kubernetes.Clientset, targetR
 	falseOutput, err := utils.Run(applyFalseCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply false stage: %s", falseOutput)
 
+	By("Waiting for the controller manager to reconcile and add taints back to all nodes")
 	Eventually(func(g Gomega) int {
 		count, err := countTaintedNodes(ctx, clientset)
 		g.Expect(err).NotTo(HaveOccurred())
+		By(fmt.Sprintf("Progress: %d/%d nodes successfully tainted", count, targetReplicas))
 		return count
 	}, "15m", "1s").Should(Equal(targetReplicas), "Tainted nodes count did not reach target replicas after setting false")
 

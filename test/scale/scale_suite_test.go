@@ -40,11 +40,13 @@ var cniReadinessRuleManifest string
 
 var _ = BeforeSuite(func() {
 
+	By("Ensuring kwokctl binary is present")
 	projectRootDir, err := utils.GetProjectDir()
 	Expect(err).NotTo(HaveOccurred())
 	toolsBinDir := filepath.Join(projectRootDir, "hack", "tools", "bin")
 	kwokctlBinaryPath = ensureKwokctl(kwokctlVersion, toolsBinDir)
 
+	By("Cleaning up any existing simulated cluster and stale controller processes")
 	// Clean up any existing cluster first to ensure we start fresh
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
@@ -55,6 +57,7 @@ var _ = BeforeSuite(func() {
 		_ = exec.Command("pkill", "-f", "node-readiness-controller").Run()
 	}
 
+	By("Creating the simulated KWOK cluster")
 	kwokConfigPath := filepath.Join(projectRootDir, "test", "scale", "testdata", "kwokctl-config.yaml")
 	createArgs := []string{
 		"create", "cluster",
@@ -80,11 +83,13 @@ var _ = BeforeSuite(func() {
 	kwokKubeconfig := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "kubeconfig.yaml")
 	_ = os.Setenv("KUBECONFIG", kwokKubeconfig)
 
+	By("Applying NodeReadinessRule CRD manifests")
 	crdConfigPath := filepath.Join(projectRootDir, "config", "crd")
 	crdCmd := exec.Command("kubectl", "apply", "-k", crdConfigPath) // #nosec G204
 	crdOutput, err := utils.Run(crdCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to apply NodeReadinessRule CRD via Kustomize:\n%s", crdOutput)
 
+	By("Compiling node-readiness-controller manager binary")
 	controllerBinName := "node-readiness-controller"
 	if runtime.GOOS == "windows" {
 		controllerBinName += ".exe"
@@ -96,6 +101,7 @@ var _ = BeforeSuite(func() {
 	buildOutput, err := utils.Run(buildCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to compile controller manager:\n%s", buildOutput)
 
+	By("Configuring controller scraper job in Prometheus config")
 	prometheusConfigPath := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "prometheus.yaml")
 
 	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath) // #nosec G304
@@ -128,6 +134,7 @@ var _ = BeforeSuite(func() {
 
 	ControllerScrapeInterval = getScrapeInterval(newConfig)
 
+	By("Waiting for Prometheus endpoint to be ready")
 	// Verify Prometheus readiness explicitly before proceeding (Item 6)
 	Eventually(func(g Gomega) {
 		resp, err := http.Get("http://127.0.0.1:9090/-/ready")
@@ -135,6 +142,7 @@ var _ = BeforeSuite(func() {
 		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	}, "30s", "1s").Should(Succeed(), "Prometheus is not ready")
 
+	By("Applying test NodeReadinessRule resource")
 	setupRuleCmd := exec.Command("kubectl", "apply", "-f", "-")
 	setupRuleCmd.Stdin = strings.NewReader(cniReadinessRuleManifest)
 
