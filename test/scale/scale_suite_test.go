@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package scale_test
+package scale
 
 import (
 	"context"
@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -42,17 +43,25 @@ func TestScale(t *testing.T) {
 }
 
 const (
-	kwokctlVersion   = "v0.8.0"
-	defaultNodeCount = 1000
+	kwokctlVersion        = "v0.8.0"
+	defaultNodeCount       = 1000
+	controllerMetricsPort = "8080"
+	prometheusPort        = "9090"
 )
 
 var (
-	kwokctlBinaryPath        string
-	controllerBinPath        string
+	kwokctlBinaryPath string
+	controllerBinPath string
 )
 
 //go:embed testdata/security-agent-rule.yaml
 var securityAgentRuleManifest string
+
+//go:embed testdata/security-agent-stage-false.yaml
+var securityAgentStageFalseManifest string
+
+//go:embed testdata/security-agent-stage-true.yaml
+var securityAgentStageTrueManifest string
 
 var _ = BeforeSuite(func() {
 
@@ -73,11 +82,10 @@ var _ = BeforeSuite(func() {
 		_ = exec.Command("pkill", "-f", "node-readiness-controller").Run()
 	}
 
-	By("Creating the simulated KWOK cluster")
 	createArgs := []string{
 		"create", "cluster",
 		"--runtime", "binary",
-		"--prometheus-port", "9090",
+		"--prometheus-port", prometheusPort,
 		"--enable-crds", "Stage",
 	}
 	if os.Getenv("DISABLE_QPS_LIMITS") == "true" {
@@ -124,14 +132,14 @@ var _ = BeforeSuite(func() {
 	newConfig := string(prometheusConfigBytes)
 	modified := false
 	if !strings.Contains(newConfig, "node-readiness-controller") {
-		extraJobYAML := `- job_name: node-readiness-controller
+		extraJobYAML := fmt.Sprintf(`- job_name: node-readiness-controller
   scrape_interval: 1s
   metrics_path: /metrics
   scheme: http
   static_configs:
   - targets:
-    - 127.0.0.1:8080
-`
+    - 127.0.0.1:%s
+`, controllerMetricsPort)
 		newConfig += extraJobYAML
 		modified = true
 	}
@@ -146,10 +154,31 @@ var _ = BeforeSuite(func() {
 	By("Waiting for Prometheus endpoint to be ready")
 	// Verify Prometheus readiness explicitly before proceeding (Item 6)
 	Eventually(func(g Gomega) {
-		resp, err := http.Get("http://127.0.0.1:9090/-/ready")
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/-/ready", prometheusPort))
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	}, "30s", "1s").Should(Succeed(), "Prometheus is not ready")
+
+	By("Scaling nodes up")
+	nodeCount := defaultNodeCount
+	if nodeCountStr := os.Getenv("NODE_COUNT"); nodeCountStr != "" {
+		var err error
+		nodeCount, err = strconv.Atoi(nodeCountStr)
+		Expect(err).NotTo(HaveOccurred(), "Invalid NODE_COUNT: %s", nodeCountStr)
+	}
+	nodeCountUsed = nodeCount
+
+	scaleCmd := exec.Command(kwokctlBinaryPath, "scale", "node",
+		"--replicas", strconv.Itoa(nodeCount),
+		"--name", "kwok")
+	scaleOutput, err := utils.Run(scaleCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to scale nodes: %s", scaleOutput)
+
+	Eventually(func(g Gomega) {
+		list, err := getKwokNodes(context.Background())
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(len(list.Items)).To(Equal(nodeCount))
+	}, "15m", "10s").Should(Succeed(), "Nodes failed to scale")
 })
 
 func ensureKwokctl(version string, targetDir string) string {
