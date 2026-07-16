@@ -30,7 +30,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -50,11 +49,10 @@ const (
 var (
 	kwokctlBinaryPath        string
 	controllerBinPath        string
-	ControllerScrapeInterval = 5 * time.Second
 )
 
-//go:embed testdata/cni-readiness-rule.yaml
-var cniReadinessRuleManifest string
+//go:embed testdata/security-agent-rule.yaml
+var securityAgentRuleManifest string
 
 var _ = BeforeSuite(func() {
 
@@ -76,13 +74,11 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("Creating the simulated KWOK cluster")
-	kwokConfigPath := filepath.Join(projectRootDir, "test", "scale", "testdata", "kwokctl-config.yaml")
 	createArgs := []string{
 		"create", "cluster",
 		"--runtime", "binary",
 		"--prometheus-port", "9090",
 		"--enable-crds", "Stage",
-		"--config", kwokConfigPath,
 	}
 	if os.Getenv("DISABLE_QPS_LIMITS") == "true" {
 		createArgs = append(createArgs, "--disable-qps-limits")
@@ -129,7 +125,7 @@ var _ = BeforeSuite(func() {
 	modified := false
 	if !strings.Contains(newConfig, "node-readiness-controller") {
 		extraJobYAML := `- job_name: node-readiness-controller
-  scrape_interval: 5s
+  scrape_interval: 1s
   metrics_path: /metrics
   scheme: http
   static_configs:
@@ -137,9 +133,6 @@ var _ = BeforeSuite(func() {
     - 127.0.0.1:8080
 `
 		newConfig += extraJobYAML
-		modified = true
-	} else if strings.Contains(newConfig, "scrape_interval: 1s") {
-		newConfig = strings.ReplaceAll(newConfig, "scrape_interval: 1s", "scrape_interval: 5s")
 		modified = true
 	}
 
@@ -150,8 +143,6 @@ var _ = BeforeSuite(func() {
 		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
 	}
 
-	ControllerScrapeInterval = getScrapeInterval(newConfig)
-
 	By("Waiting for Prometheus endpoint to be ready")
 	// Verify Prometheus readiness explicitly before proceeding (Item 6)
 	Eventually(func(g Gomega) {
@@ -159,13 +150,6 @@ var _ = BeforeSuite(func() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	}, "30s", "1s").Should(Succeed(), "Prometheus is not ready")
-
-	By("Applying test NodeReadinessRule resource")
-	setupRuleCmd := exec.Command("kubectl", "apply", "-f", "-")
-	setupRuleCmd.Stdin = strings.NewReader(cniReadinessRuleManifest)
-
-	setupRuleCmdOutput, err := utils.Run(setupRuleCmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to apply CNI NodeReadinessRule manifest:\n%s", setupRuleCmdOutput)
 })
 
 func ensureKwokctl(version string, targetDir string) string {
@@ -207,29 +191,4 @@ func ensureKwokctl(version string, targetDir string) string {
 	Expect(err).NotTo(HaveOccurred(), "Failed to write binary content to disk target")
 
 	return localBinaryPath
-}
-
-func getScrapeInterval(configStr string) time.Duration {
-	lines := strings.Split(configStr, "\n")
-	inJob := false
-	for _, line := range lines {
-		if strings.Contains(line, "job_name: node-readiness-controller") {
-			inJob = true
-			continue
-		}
-		if inJob && strings.Contains(line, "scrape_interval:") {
-			parts := strings.Split(line, ":")
-			if len(parts) == 2 {
-				val := strings.TrimSpace(parts[1])
-				dur, err := time.ParseDuration(val)
-				if err == nil {
-					return dur
-				}
-			}
-		}
-		if inJob && strings.Contains(line, "job_name:") {
-			inJob = false
-		}
-	}
-	return 5 * time.Second
 }
