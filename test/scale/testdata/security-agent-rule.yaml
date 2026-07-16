@@ -11,7 +11,7 @@ spec:
     key: "readiness.k8s.io/SecurityAgentNotReady"
     effect: "NoSchedule"
     value: "pending"
-  enforcementMode: "bootstrap-only"
+  enforcementMode: "continuous"
   nodeSelector:
     matchExpressions:
       - key: node-role.kubernetes.io/control-plane
