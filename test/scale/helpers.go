@@ -37,6 +37,33 @@ import (
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
 
+type kwokNodeList struct {
+	Items []struct {
+		Spec struct {
+			Taints []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"taints"`
+		} `json:"spec"`
+	} `json:"items"`
+}
+
+type prometheusResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		ResultType string `json:"resultType"`
+		Result     []struct {
+			Value []interface{} `json:"value"`
+		} `json:"result"`
+	} `json:"data"`
+}
+
+type QueryResult struct {
+	PhaseTitle      string            `json:"phase_title"`
+	DurationSeconds float64           `json:"duration_seconds"`
+	Metrics         map[string]string `json:"metrics"`
+}
+
 func ensureKwokctl(version string, targetDir string) string {
 	goOS := runtime.GOOS
 	goArch := runtime.GOARCH
@@ -78,17 +105,6 @@ func ensureKwokctl(version string, targetDir string) string {
 	return localBinaryPath
 }
 
-type kwokNodeList struct {
-	Items []struct {
-		Spec struct {
-			Taints []struct {
-				Key   string `json:"key"`
-				Value string `json:"value"`
-			} `json:"taints"`
-		} `json:"spec"`
-	} `json:"items"`
-}
-
 func getKwokNodes(ctx context.Context) (*kwokNodeList, error) {
 	cmd := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-l", "type=kwok", "-o", "json")
 	output, err := utils.Run(cmd)
@@ -121,18 +137,15 @@ func countTaintedNodes(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
+func queryPrometheusInstant(ctx context.Context, query string, ts float64) (string, error) {
+	urlStr := fmt.Sprintf("http://127.0.0.1:%s/api/v1/query?query=%s&time=%.3f", prometheusPort, url.QueryEscape(query), ts)
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return client.Do(req)
-}
-
-func queryPrometheusInstant(ctx context.Context, query string, ts float64) (string, error) {
-	urlStr := fmt.Sprintf("http://127.0.0.1:%s/api/v1/query?query=%s&time=%.3f", prometheusPort, url.QueryEscape(query), ts)
-	resp, err := doGetRequest(ctx, urlStr)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -142,15 +155,7 @@ func queryPrometheusInstant(ctx context.Context, query string, ts float64) (stri
 		return "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
-	var promResp struct {
-		Status string `json:"status"`
-		Data   struct {
-			ResultType string `json:"resultType"`
-			Result     []struct {
-				Value []interface{} `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
+	var promResp prometheusResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&promResp); err != nil {
 		return "", err
