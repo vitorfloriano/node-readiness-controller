@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -242,5 +243,71 @@ var _ = BeforeSuite(func() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
 	}, "15s", "500ms").Should(Succeed(), fmt.Sprintf("Controller failed to start or bind to port %s", controllerMetricsPort))
+})
+
+var _ = AfterSuite(func() {
+	projectRootDir, err := utils.GetProjectDir()
+	Expect(err).NotTo(HaveOccurred())
+
+	artifactsDir := os.Getenv("ARTIFACTS")
+	if artifactsDir == "" {
+		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
+	}
+
+	err = os.MkdirAll(artifactsDir, 0750)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Generate and write Markdown Performance Report
+	By("Writing Markdown performance report")
+	templatePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "scalability_report.md.tmpl")
+	tmpl, err := template.ParseFiles(templatePath)
+	Expect(err).NotTo(HaveOccurred())
+
+	reportData := struct {
+		NodeCount int
+		Mode      string
+		Phases    []QueryResult
+	}{
+		NodeCount: nodeCountUsed,
+		Mode:      "continuous",
+		Phases:    queryResults,
+	}
+
+	reportPath := filepath.Join(artifactsDir, "scalability_report.md")
+	reportFile, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	Expect(err).NotTo(HaveOccurred())
+	defer func() { _ = reportFile.Close() }()
+
+	err = tmpl.Execute(reportFile, reportData)
+	Expect(err).NotTo(HaveOccurred())
+
+	if os.Getenv("SKIP_TEARDOWN") != "true" {
+		// Terminate the background controller process
+		By("Terminating the background controller process")
+		if controllerCmd != nil && controllerCmd.Process != nil {
+			_ = controllerCmd.Process.Kill()
+			_ = controllerCmd.Wait()
+		}
+		if controllerLogFile != nil {
+			_ = controllerLogFile.Close()
+		}
+	}
+
+	if os.Getenv("SKIP_TEARDOWN") == "true" {
+		By("Skipping cluster teardown because SKIP_TEARDOWN is set to true")
+		return
+	}
+
+	// Delete the kwok cluster cleanly
+	By("Deleting the kwokctl cluster...")
+	deleteCmd := exec.Command(kwokctlBinaryPath, "delete", "cluster", "--name", "kwok") // #nosec G204
+	deleteOutput, err := utils.Run(deleteCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to delete kwok cluster:\n%s", deleteOutput)
+
+	// Wait dynamically for Prometheus to shut down completely by verifying the port is closed
+	Eventually(func(g Gomega) {
+		_, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/-/ready", prometheusPort))
+		g.Expect(err).To(HaveOccurred()) // connection refused - Prometheus is down!
+	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 })
 
