@@ -65,6 +65,9 @@ var securityAgentStageFalseManifest string
 //go:embed testdata/security-agent-stage-true.yaml
 var securityAgentStageTrueManifest string
 
+//go:embed testdata/prometheus-nrc-job.yaml
+var prometheusJobTemplate string
+
 var _ = BeforeSuite(func() {
 
 	By("Ensuring kwokctl binary is present")
@@ -134,14 +137,7 @@ var _ = BeforeSuite(func() {
 	newConfig := string(prometheusConfigBytes)
 	modified := false
 	if !strings.Contains(newConfig, "node-readiness-controller") {
-		extraJobYAML := fmt.Sprintf(`- job_name: node-readiness-controller
-  scrape_interval: 1s
-  metrics_path: /metrics
-  scheme: http
-  static_configs:
-  - targets:
-    - 127.0.0.1:%s
-`, controllerMetricsPort)
+		extraJobYAML := fmt.Sprintf(prometheusJobTemplate, controllerMetricsPort)
 		newConfig += extraJobYAML
 		modified = true
 	}
