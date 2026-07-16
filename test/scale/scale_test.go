@@ -121,11 +121,6 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
 
-		// Clean up the True stage
-		deleteTrueCmd := exec.CommandContext(ctx, "kubectl", "delete", "stage", "security-agent-stage-true", "--ignore-not-found") // #nosec G204
-		_, err = utils.Run(deleteTrueCmd)
-		Expect(err).NotTo(HaveOccurred())
-
 		phases = append(phases, PhaseStats{
 			Title: fmt.Sprintf("%d Nodes - Untainting / Annotation Phase [Duration: %s]", nodeCount, untaintDuration.Round(time.Millisecond)),
 			Start: untaintStart,
@@ -139,4 +134,3 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		}
 	})
 })
-
