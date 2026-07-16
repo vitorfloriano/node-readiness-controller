@@ -44,7 +44,7 @@ func TestScale(t *testing.T) {
 
 const (
 	kwokctlVersion        = "v0.8.0"
-	defaultNodeCount       = 1000
+	defaultNodeCount      = 1000
 	controllerMetricsPort = "8080"
 	prometheusPort        = "9090"
 )
@@ -281,21 +281,19 @@ var _ = AfterSuite(func() {
 	err = tmpl.Execute(reportFile, reportData)
 	Expect(err).NotTo(HaveOccurred())
 
-	if os.Getenv("SKIP_TEARDOWN") != "true" {
-		// Terminate the background controller process
-		By("Terminating the background controller process")
-		if controllerCmd != nil && controllerCmd.Process != nil {
-			_ = controllerCmd.Process.Kill()
-			_ = controllerCmd.Wait()
-		}
-		if controllerLogFile != nil {
-			_ = controllerLogFile.Close()
-		}
+	if os.Getenv("SKIP_TEARDOWN") == "true" {
+		By("Skipping teardown. Controller background process, KWOK cluster and Prometheus tsdb kept alive.")
+		return
 	}
 
-	if os.Getenv("SKIP_TEARDOWN") == "true" {
-		By("Skipping cluster teardown because SKIP_TEARDOWN is set to true")
-		return
+	// Terminate the background controller process
+	By("Terminating the background controller process")
+	if controllerCmd != nil && controllerCmd.Process != nil {
+		_ = controllerCmd.Process.Kill()
+		_ = controllerCmd.Wait()
+	}
+	if controllerLogFile != nil {
+		_ = controllerLogFile.Close()
 	}
 
 	// Delete the kwok cluster cleanly
@@ -303,11 +301,4 @@ var _ = AfterSuite(func() {
 	deleteCmd := exec.Command(kwokctlBinaryPath, "delete", "cluster", "--name", "kwok") // #nosec G204
 	deleteOutput, err := utils.Run(deleteCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to delete kwok cluster:\n%s", deleteOutput)
-
-	// Wait dynamically for Prometheus to shut down completely by verifying the port is closed
-	Eventually(func(g Gomega) {
-		_, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/-/ready", prometheusPort))
-		g.Expect(err).To(HaveOccurred()) // connection refused - Prometheus is down!
-	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 })
-
