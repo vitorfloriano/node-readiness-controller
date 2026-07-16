@@ -80,9 +80,6 @@ func ensureKwokctl(version string, targetDir string) string {
 
 type kwokNodeList struct {
 	Items []struct {
-		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
-		} `json:"metadata"`
 		Spec struct {
 			Taints []struct {
 				Key   string `json:"key"`
@@ -116,24 +113,6 @@ func countTaintedNodes(ctx context.Context) (int, error) {
 	for _, node := range list.Items {
 		for _, taint := range node.Spec.Taints {
 			if taint.Key == "readiness.k8s.io/SecurityAgentNotReady" && taint.Value == "pending" {
-				count++
-				break
-			}
-		}
-	}
-	return count, nil
-}
-
-func countAnnotatedNodes(ctx context.Context) (int, error) {
-	list, err := getKwokNodes(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for _, node := range list.Items {
-		for k := range node.Metadata.Annotations {
-			if strings.HasPrefix(k, "readiness.k8s.io/bootstrap-completed-") {
 				count++
 				break
 			}

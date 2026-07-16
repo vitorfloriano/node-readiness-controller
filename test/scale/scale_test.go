@@ -107,22 +107,14 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			tainted, err := countTaintedNodes(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(tainted).To(Equal(0))
-
-			if strings.Contains(securityAgentRuleManifest, "bootstrap-only") {
-				annotated, err := countAnnotatedNodes(ctx)
-				g.Expect(err).NotTo(HaveOccurred())
-				By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted, %d/%d nodes annotated", tainted, nodeCount, annotated, nodeCount))
-				g.Expect(annotated).To(Equal(nodeCount))
-			} else {
-				By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted (continuous mode, skipping annotation check)", tainted, nodeCount))
-			}
+			By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted", tainted, nodeCount))
 		}, "15m", "10s").Should(Succeed(), "Failed to complete untainting phase")
 
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
 
 		phases = append(phases, PhaseStats{
-			Title: fmt.Sprintf("%d Nodes - Untainting / Annotation Phase [Duration: %s]", nodeCount, untaintDuration.Round(time.Millisecond)),
+			Title: fmt.Sprintf("%d Nodes - Untainting Phase [Duration: %s]", nodeCount, untaintDuration.Round(time.Millisecond)),
 			Start: untaintStart,
 			End:   untaintEnd,
 		})

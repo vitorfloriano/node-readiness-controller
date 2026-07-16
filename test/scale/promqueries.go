@@ -59,24 +59,7 @@ var metricQueries = []MetricQuery{
 		QueryTmpl: "histogram_quantile(0.99, sum(rate(node_readiness_reconciliation_latency_seconds_bucket{rule=\"security-agent-readiness-rule\"}[%ds])) by (le))",
 		Unit:      "s",
 	},
-	{
-		Key:         "bootstrap_duration_p50",
-		QueryTmpl:   "histogram_quantile(0.50, sum(rate(node_readiness_bootstrap_duration_seconds_bucket{rule=\"security-agent-readiness-rule\"}[%ds])) by (le))",
-		Unit:        "s",
-		PhaseFilter: "Untainting",
-	},
-	{
-		Key:         "bootstrap_duration_p90",
-		QueryTmpl:   "histogram_quantile(0.90, sum(rate(node_readiness_bootstrap_duration_seconds_bucket{rule=\"security-agent-readiness-rule\"}[%ds])) by (le))",
-		Unit:        "s",
-		PhaseFilter: "Untainting",
-	},
-	{
-		Key:         "bootstrap_duration_p99",
-		QueryTmpl:   "histogram_quantile(0.99, sum(rate(node_readiness_bootstrap_duration_seconds_bucket{rule=\"security-agent-readiness-rule\"}[%ds])) by (le))",
-		Unit:        "s",
-		PhaseFilter: "Untainting",
-	},
+
 	{
 		Key:       "workqueue_queue_duration_p50",
 		QueryTmpl: "histogram_quantile(0.50, sum(rate(workqueue_queue_duration_seconds_bucket{name=\"node\"}[%ds])) by (le))",
@@ -134,12 +117,7 @@ var metricQueries = []MetricQuery{
 		Unit:      "ops",
 		IsCounter: true,
 	},
-	{
-		Key:       "bootstrap_completed_total",
-		QueryTmpl: "sum(increase(node_readiness_bootstrap_completed_total{rule=\"security-agent-readiness-rule\"}[%ds]))",
-		Unit:      "completed",
-		IsCounter: true,
-	},
+
 	{
 		Key:       "condition_failures_total",
 		QueryTmpl: "sum(increase(node_readiness_condition_failures_total{rule=\"security-agent-readiness-rule\"}[%ds]))",

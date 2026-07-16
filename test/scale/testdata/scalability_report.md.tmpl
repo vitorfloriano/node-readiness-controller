@@ -13,11 +13,7 @@
     *   P50: {{index .Metrics "reconciliation_latency_p50"}}
     *   P90: {{index .Metrics "reconciliation_latency_p90"}}
     *   P99: {{index .Metrics "reconciliation_latency_p99"}}
-{{if index .Metrics "bootstrap_duration_p50"}}*   **Bootstrap Duration (E2E)**:
-    *   P50: {{index .Metrics "bootstrap_duration_p50"}}
-    *   P90: {{index .Metrics "bootstrap_duration_p90"}}
-    *   P99: {{index .Metrics "bootstrap_duration_p99"}}
-{{end}}*   **Rule Evaluation Duration**:
+*   **Rule Evaluation Duration**:
     *   P50: {{index .Metrics "rule_evaluation_duration_p50"}}
     *   P90: {{index .Metrics "rule_evaluation_duration_p90"}}
     *   P99: {{index .Metrics "rule_evaluation_duration_p99"}}
@@ -32,9 +28,8 @@
 
 ### Node Readiness Custom Counts
 *   **Taint Operations**:
-    *   Added: {{index .Metrics "taint_operations_add"}}
-    *   Removed: {{index .Metrics "taint_operations_remove"}}
-*   **Bootstraps Completed**: {{index .Metrics "bootstrap_completed_total"}}
+     *   Added: {{index .Metrics "taint_operations_add"}}
+     *   Removed: {{index .Metrics "taint_operations_remove"}}
 *   **Condition Check Failures**: {{index .Metrics "condition_failures_total"}}
 *   **Controller Operational Failures**: {{index .Metrics "operational_failures_total"}}
 
