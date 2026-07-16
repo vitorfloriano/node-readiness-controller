@@ -10,12 +10,12 @@ During execution, the scale suite performs the following lifecycle:
 1. **Pre-flight process cleanup**: Detects and terminates any stale controller managers holding port `8080` (compatible with both Unix and Windows hosts).
 2. **Cluster Provisioning**: Automatically provisions a simulated KWOK cluster in the background using `kwokctl`.
 3. **Controller Startup**: Compiles the latest manager binary and starts it in the background targeting the KWOK cluster API server.
-4. **Scraper Registry**: Registers a metrics scraper targeting the controller's `/metrics` endpoint and spins up a local Prometheus scraper instance on port `9090`.
+4. **Scraper Registry**: Registers a metrics scraper targeting the controller's `/metrics` endpoint and spins up a local Prometheus scraper instance on port `9090` with a `1s` scrape interval.
 5. **Phase Execution**:
-    *   **Untaint (Removal) Phase**: Scales the cluster to the target replica count (with all nodes pending initial taints), simulates a CNI-Ready status transition to `true`, and measures how fast the controller removes taints across all nodes.
-    *   **Retaint (Add) Phase**: Triggers CNI status transitions to `false` and measures how fast the controller applies taints across all nodes.
-6. **Telemetry Report**: Queries the active Prometheus instance (calculating workqueue latency quantiles, CPU rates, memory peaks, and GC pauses) and writes the results to `test/scale/artifacts/`.
-7. **Clean Teardown**: Gracefully deletes the KWOK cluster, stops Prometheus, and archives the Prometheus TSDB directory.
+    *   **Tainting (Add) Phase**: Registers the `NodeReadinessRule` and triggers CNI/agent status transitions to `false`, measuring how fast the controller applies taints across all nodes.
+    *   **Untainting / Annotation (Remove) Phase**: Simulates CNI/agent status transitions to `true` (ready), measuring how fast the controller removes taints and writes the `bootstrap-completed` annotation across all nodes.
+6. **Telemetry Report**: Queries the active Prometheus instance (calculating reconcile latencies, workqueue durations, custom node readiness counters, CPU rates, and memory peaks) and writes the results to `test/scale/artifacts/scalability_report.md` using Go's `text/template` engine.
+7. **Clean Teardown**: Gracefully deletes the KWOK cluster, stops Prometheus, and cleans up the controller manager process (unless `SKIP_TEARDOWN=true` is set).
 
 ---
 
@@ -25,16 +25,16 @@ All scale parameters are configurable via shell environment variables passed dir
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `NODE_COUNT` | *None* (Falls back to `SCALE_SIZE` -> 50) | The total number of simulated nodes to register. |
-| `SCALE_SIZE` | `EXTRA_SMALL` | Pre-defined phase configurations. Overridden by `NODE_COUNT`. Values: `EXTRA_SMALL` / `XS` (50), `SMALL` / `S` (50, 100), `MEDIUM` / `M` (50, 100, 500), `LARGE` / `L` (50, 100, 500, 1000). |
+| `NODE_COUNT` | `1000` | The total number of simulated nodes to register. |
 | `NODE_CONCURRENT_RECONCILES` | `1` | Number of concurrent worker threads allocated to the Node controller. |
 | `RULE_CONCURRENT_RECONCILES` | `1` | Number of concurrent worker threads allocated to the NodeReadinessRule controller. |
 | `KUBE_API_QPS` | `5` | The QPS limit for the controller's Kubernetes API client (client-go default). |
 | `KUBE_API_BURST` | `10` | The Burst limit for the controller's Kubernetes API client (client-go default). |
 | `DISABLE_QPS_LIMITS` | `false` | Disable API Server write rate throttling inside the KWOK cluster. |
 | `NODE_LEASE_DURATION_SECONDS` | `40` | The duration of the node lease lease window configured in KWOK. |
-| `ARTIFACTS` | `test/scale/artifacts/` | Directory where test logs, reports, and tarballs are saved. |
+| `ARTIFACTS` | `test/scale/artifacts/` | Directory where test logs and reports are saved. |
 | `KUBECONFIG` | *Automatic* | Target kubeconfig path. Defaults to the managed KWOK cluster configuration. |
+| `SKIP_TEARDOWN` | `false` | If set to `true`, keeps the simulated nodes active, and the KWOK cluster/Prometheus instance running after the test finishes. |
 
 ---
 
@@ -42,30 +42,28 @@ All scale parameters are configurable via shell environment variables passed dir
 
 Run all commands from the root directory of the repository.
 
-### 1. Default Local Test
-Runs a quick validation test using the default parameters (50 nodes):
+### 1. Default Scale Test (1000 Nodes)
+Runs the validation test with default QPS/concurrency settings:
 ```bash
 make test-scale
 ```
 
-### 2. Medium Scale Test (500 Nodes, 10 Workers)
+### 2. Custom Validation Test (100 Nodes, 10 Workers)
 ```bash
-NODE_COUNT=500 NODE_CONCURRENT_RECONCILES=10 make test-scale
+NODE_COUNT=100 NODE_CONCURRENT_RECONCILES=10 make test-scale
 ```
 
 ### 3. Tuned High Scale Test (1000 Nodes)
-Runs the pre-tuned high-scale configuration (50 workers, 500 QPS, 1000 API Burst, and 400s lease window) to test maximum throughput:
+Runs a tuned high-scale configuration with increased concurrency and API server QPS limits:
 ```bash
-make test-scale-1000
+NODE_COUNT=1000 NODE_CONCURRENT_RECONCILES=50 KUBE_API_QPS=500 KUBE_API_BURST=1000 DISABLE_QPS_LIMITS=true NODE_LEASE_DURATION_SECONDS=400 make test-scale
 ```
 
 ---
 
 ## Output Artifacts
 
-Upon a successful test run, the following files are populated in the configured `ARTIFACTS` directory:
+Upon a successful test run, only two output files are populated in the configured `ARTIFACTS` directory:
 
-*   **`performance_report.md`**: A detailed Markdown report capturing phase durations, P50/P90/P99 latency histograms, memory peaks, and GC durations.
-*   **`metrics.json`**: A raw JSON archive containing time-series data for each metric, compatible with JSON graphing plugins (such as Grafana Infinity datasource).
-*   **`prometheus_tsdb.tar.gz`**: A compressed tarball of the Prometheus database containing all time-series points, which can be extracted and loaded into a local Grafana instance.
+*   **`scalability_report.md`**: A detailed Markdown report capturing phase durations, P50/P90/P99 latency histograms, workqueue metrics, custom controller metrics (taint operations, completed bootstraps, rule evaluation durations, condition failures), and CPU/memory peaks.
 *   **`controller.log`**: Standard output logs generated by the controller manager daemon during execution.
