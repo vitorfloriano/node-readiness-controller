@@ -30,12 +30,6 @@ import (
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
 
-type QueryResult struct {
-	PhaseTitle      string            `json:"phase_title"`
-	DurationSeconds float64           `json:"duration_seconds"`
-	Metrics         map[string]string `json:"metrics"`
-}
-
 type PhaseStats struct {
 	Title string
 	Start time.Time
