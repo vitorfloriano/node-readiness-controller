@@ -22,7 +22,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -52,6 +51,8 @@ const (
 var (
 	kwokctlBinaryPath string
 	controllerBinPath string
+	controllerCmd     *exec.Cmd
+	controllerLogFile *os.File
 )
 
 //go:embed testdata/security-agent-rule.yaml
@@ -179,45 +180,67 @@ var _ = BeforeSuite(func() {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(len(list.Items)).To(Equal(nodeCount))
 	}, "15m", "10s").Should(Succeed(), "Nodes failed to scale")
+
+	// Resolve kubeconfig path
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		Expect(err).NotTo(HaveOccurred(), "Failed to get user home directory")
+		kubeconfig = filepath.Join(home, ".kube", "config")
+	}
+
+	artifactsDir := os.Getenv("ARTIFACTS")
+	if artifactsDir == "" {
+		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
+	}
+
+	err = os.MkdirAll(artifactsDir, 0750)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Create log file for the controller directly in the artifacts directory
+	var errError error
+	controllerLogFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log")) // #nosec G304
+	Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
+
+	// Start the controller manager process
+	By("Starting the node-readiness-controller manager daemon process")
+	args := []string{
+		fmt.Sprintf("--metrics-bind-address=:%s", controllerMetricsPort),
+		"--metrics-secure=false",
+		"--leader-elect=false",
+		"--enable-webhook=false",
+	}
+	if qps := os.Getenv("KUBE_API_QPS"); qps != "" {
+		args = append(args, "--kube-api-qps="+qps)
+	}
+	if burst := os.Getenv("KUBE_API_BURST"); burst != "" {
+		args = append(args, "--kube-api-burst="+burst)
+	}
+	if nodeConc := os.Getenv("NODE_CONCURRENT_RECONCILES"); nodeConc != "" {
+		args = append(args, "--node-concurrent-reconciles="+nodeConc)
+	}
+	if ruleConc := os.Getenv("RULE_CONCURRENT_RECONCILES"); ruleConc != "" {
+		args = append(args, "--rule-concurrent-reconciles="+ruleConc)
+	}
+
+	if runtime.GOOS != "windows" {
+		controllerCmd = exec.Command("setsid", append([]string{controllerBinPath}, args...)...)
+	} else {
+		controllerCmd = exec.Command(controllerBinPath, args...)
+	}
+	controllerCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+	controllerCmd.Stdout = controllerLogFile
+	controllerCmd.Stderr = controllerLogFile
+
+	err = controllerCmd.Start()
+	Expect(err).NotTo(HaveOccurred(), "Failed to start controller process")
+
+	// Wait for the controller metrics to be ready
+	By("Waiting for the controller metrics endpoint to be responsive")
+	Eventually(func(g Gomega) {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/metrics", controllerMetricsPort))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	}, "15s", "500ms").Should(Succeed(), fmt.Sprintf("Controller failed to start or bind to port %s", controllerMetricsPort))
 })
 
-func ensureKwokctl(version string, targetDir string) string {
-	goOS := runtime.GOOS
-	goArch := runtime.GOARCH
-
-	binaryName := "kwokctl"
-	if goOS == "windows" {
-		binaryName += ".exe"
-	}
-	localBinaryPath := filepath.Join(targetDir, binaryName)
-
-	if _, err := os.Stat(localBinaryPath); err == nil {
-		return localBinaryPath
-	}
-
-	err := os.MkdirAll(targetDir, 0750)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create tools directory structure")
-	downloadURL := fmt.Sprintf(
-		"https://github.com/kubernetes-sigs/kwok/releases/download/%s/kwokctl-%s-%s",
-		version, goOS, goArch,
-	)
-
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create download request")
-	resp, err := http.DefaultClient.Do(req) // #nosec G107
-	Expect(err).NotTo(HaveOccurred(), "Failed to initiate kwokctl binary download")
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		Fail(fmt.Sprintf("Failed to download kwokctl from URL %s: Status %s", downloadURL, resp.Status))
-	}
-
-	out, err := os.OpenFile(localBinaryPath, os.O_CREATE|os.O_WRONLY, 0700) // #nosec G304 G302
-	Expect(err).NotTo(HaveOccurred(), "Failed to create local binary destination file")
-	defer func() { _ = out.Close() }()
-
-	_, err = io.Copy(out, resp.Body)
-	Expect(err).NotTo(HaveOccurred(), "Failed to write binary content to disk target")
-
-	return localBinaryPath
-}
