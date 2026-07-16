@@ -261,7 +261,7 @@ var _ = AfterSuite(func() {
 	reportData := struct {
 		NodeCount int
 		Mode      string
-		Phases    []QueryResult
+		Phases    []queryResult
 	}{
 		NodeCount: nodeCountUsed,
 		Mode:      "continuous",

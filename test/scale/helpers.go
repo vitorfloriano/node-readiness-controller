@@ -58,7 +58,7 @@ type prometheusResponse struct {
 	} `json:"data"`
 }
 
-type QueryResult struct {
+type queryResult struct {
 	PhaseTitle      string            `json:"phase_title"`
 	DurationSeconds float64           `json:"duration_seconds"`
 	Metrics         map[string]string `json:"metrics"`
@@ -176,7 +176,7 @@ func queryPrometheusInstant(ctx context.Context, query string, ts float64) (stri
 	return valStr, nil
 }
 
-func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (QueryResult, error) {
+func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (queryResult, error) {
 	// Sleep 2 seconds to ensure Prometheus scrapes the final data points
 	time.Sleep(2 * time.Second)
 
@@ -212,7 +212,7 @@ func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, ph
 		}
 	}
 
-	res := QueryResult{
+	res := queryResult{
 		PhaseTitle:      phaseTitle,
 		DurationSeconds: phaseEnd.Sub(phaseStart).Seconds(),
 		Metrics:         metricsMap,

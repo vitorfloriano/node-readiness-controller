@@ -30,14 +30,14 @@ import (
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
 
-type PhaseStats struct {
-	Title string
-	Start time.Time
-	End   time.Time
+type phaseStats struct {
+	title string
+	start time.Time
+	end   time.Time
 }
 
 var (
-	queryResults  []QueryResult
+	queryResults  []queryResult
 	nodeCountUsed int
 )
 
@@ -48,7 +48,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		ctx := context.Background()
 		nodeCount := nodeCountUsed
 
-		var phases []PhaseStats
+		var phases []phaseStats
 
 		// Tainting Phase
 		taintStart := time.Now()
@@ -81,10 +81,10 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		_, err = utils.Run(deleteFalseCmd)
 		Expect(err).NotTo(HaveOccurred())
 
-		phases = append(phases, PhaseStats{
-			Title: fmt.Sprintf("%d Nodes - Tainting (Add) Phase [Duration: %s]", nodeCount, taintDuration.Round(time.Millisecond)),
-			Start: taintStart,
-			End:   taintEnd,
+		phases = append(phases, phaseStats{
+			title: fmt.Sprintf("%d Nodes - Tainting (Add) Phase [Duration: %s]", nodeCount, taintDuration.Round(time.Millisecond)),
+			start: taintStart,
+			end:   taintEnd,
 		})
 
 		// Untainting / Annotation Phase
@@ -107,14 +107,14 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
 
-		phases = append(phases, PhaseStats{
-			Title: fmt.Sprintf("%d Nodes - Untainting Phase [Duration: %s]", nodeCount, untaintDuration.Round(time.Millisecond)),
-			Start: untaintStart,
-			End:   untaintEnd,
+		phases = append(phases, phaseStats{
+			title: fmt.Sprintf("%d Nodes - Untainting Phase [Duration: %s]", nodeCount, untaintDuration.Round(time.Millisecond)),
+			start: untaintStart,
+			end:   untaintEnd,
 		})
 
 		for _, phase := range phases {
-			reportStruct, err := collectAndReportMetricsForWindow(ctx, phase.Title, phase.Start, phase.End)
+			reportStruct, err := collectAndReportMetricsForWindow(ctx, phase.title, phase.start, phase.end)
 			Expect(err).NotTo(HaveOccurred())
 			queryResults = append(queryResults, reportStruct)
 		}
