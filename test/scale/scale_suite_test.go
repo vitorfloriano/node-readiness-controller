@@ -54,6 +54,7 @@ var (
 	controllerBinPath string
 	controllerCmd     *exec.Cmd
 	controllerLogFile *os.File
+	artifactsDir      string
 )
 
 //go:embed testdata/security-agent-rule.yaml
@@ -186,7 +187,7 @@ var _ = BeforeSuite(func() {
 		kubeconfig = filepath.Join(home, ".kube", "config")
 	}
 
-	artifactsDir := os.Getenv("ARTIFACTS")
+	artifactsDir = os.Getenv("ARTIFACTS")
 	if artifactsDir == "" {
 		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
 	}
@@ -243,14 +244,6 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	projectRootDir, err := utils.GetProjectDir()
-	Expect(err).NotTo(HaveOccurred())
-
-	artifactsDir := os.Getenv("ARTIFACTS")
-	if artifactsDir == "" {
-		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
-	}
-
-	err = os.MkdirAll(artifactsDir, 0750)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Generate and write Markdown Performance Report
