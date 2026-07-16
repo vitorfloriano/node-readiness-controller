@@ -167,7 +167,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	It("should successfully run the scale test phases and evaluate performance", func() {
 		ctx := context.Background()
 
-		nodeCount := 1000
+		nodeCount := defaultNodeCount
 		if nodeCountStr := os.Getenv("NODE_COUNT"); nodeCountStr != "" {
 			var err error
 			nodeCount, err = strconv.Atoi(nodeCountStr)
@@ -294,7 +294,7 @@ var _ = AfterSuite(func() {
 
 	// Generate and write Markdown Performance Report
 	By("Writing Markdown performance report")
-	templatePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "performance_report.md.tmpl")
+	templatePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "scalability_report.md.tmpl")
 	tmpl, err := template.ParseFiles(templatePath)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -308,7 +308,7 @@ var _ = AfterSuite(func() {
 		Phases:    queryResults,
 	}
 
-	reportPath := filepath.Join(artifactsDir, "performance_report.md")
+	reportPath := filepath.Join(artifactsDir, "scalability_report.md")
 	reportFile, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	Expect(err).NotTo(HaveOccurred())
 	defer func() { _ = reportFile.Close() }()
