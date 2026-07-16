@@ -42,8 +42,8 @@ func TestScale(t *testing.T) {
 }
 
 const (
-	kwokctlVersion = "v0.8.0"
-	nodeCount      = 1000
+	kwokctlVersion   = "v0.8.0"
+	defaultNodeCount = 1000
 )
 
 var (
