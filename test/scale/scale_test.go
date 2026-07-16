@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package scale_test
+package scale
 
 import (
 	"context"
@@ -28,16 +28,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/node-readiness-controller/test/utils"
 )
 
@@ -60,14 +56,12 @@ var (
 
 var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 	var (
-		cmd       *exec.Cmd
-		clientset *kubernetes.Clientset
-		logFile   *os.File
+		cmd     *exec.Cmd
+		logFile *os.File
 	)
 
 	BeforeEach(func() {
 		queryResults = nil
-		nodeCountUsed = 1000
 
 		// Resolve kubeconfig path
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -76,12 +70,6 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to get user home directory")
 			kubeconfig = filepath.Join(home, ".kube", "config")
 		}
-
-		// Set up Kubernetes clientset
-		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-		Expect(err).NotTo(HaveOccurred(), "Failed to build client-go config")
-		clientset, err = kubernetes.NewForConfig(config)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create clientset")
 
 		// Resolve artifacts directory
 		projectRootDir, err := utils.GetProjectDir()
@@ -103,7 +91,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		// Start the controller manager process
 		By("Starting the node-readiness-controller manager daemon process")
 		args := []string{
-			"--metrics-bind-address=:8080",
+			fmt.Sprintf("--metrics-bind-address=:%s", controllerMetricsPort),
 			"--metrics-secure=false",
 			"--leader-elect=false",
 			"--enable-webhook=false",
@@ -136,10 +124,10 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		// Wait for the controller metrics to be ready
 		By("Waiting for the controller metrics endpoint to be responsive")
 		Eventually(func(g Gomega) {
-			resp, err := http.Get("http://127.0.0.1:8080/metrics")
+			resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/metrics", controllerMetricsPort))
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(resp.StatusCode).To(Equal(http.StatusOK))
-		}, "15s", "500ms").Should(Succeed(), "Controller failed to start or bind to port 8080")
+		}, "15s", "500ms").Should(Succeed(), fmt.Sprintf("Controller failed to start or bind to port %s", controllerMetricsPort))
 	})
 
 	AfterEach(func() {
@@ -158,46 +146,11 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			_ = logFile.Close()
 		}
 
-		// Clean up simulated nodes
-		_ = clientset.CoreV1().Nodes().DeleteCollection(context.Background(), metav1.DeleteOptions{}, metav1.ListOptions{
-			LabelSelector: "type=kwok",
-		})
 	})
 
 	It("should successfully run the scale test phases and evaluate performance", func() {
 		ctx := context.Background()
-
-		nodeCount := defaultNodeCount
-		if nodeCountStr := os.Getenv("NODE_COUNT"); nodeCountStr != "" {
-			var err error
-			nodeCount, err = strconv.Atoi(nodeCountStr)
-			Expect(err).NotTo(HaveOccurred(), "Invalid NODE_COUNT: %s", nodeCountStr)
-		}
-		nodeCountUsed = nodeCount
-
-		By(fmt.Sprintf("Scaling nodes to %d", nodeCount))
-
-		projectRootDir, err := utils.GetProjectDir()
-		Expect(err).NotTo(HaveOccurred())
-
-		// Scale using kwokctl
-		scaleCmd := exec.CommandContext(ctx, kwokctlBinaryPath, "scale", "node", // #nosec G204 G702
-			"--replicas", strconv.Itoa(nodeCount),
-			"--name", "kwok")
-		scaleOutput, err := utils.Run(scaleCmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to scale nodes: %s", scaleOutput)
-
-		// Verify all newly scaled nodes are created and start untainted
-		By("Verifying all newly scaled nodes are created and start untainted")
-		Eventually(func(g Gomega) {
-			nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "type=kwok"})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(len(nodes.Items)).To(Equal(nodeCount))
-			
-			tainted, err := countTaintedNodes(ctx, clientset)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(tainted).To(Equal(0))
-		}, "15m", "1s").Should(Succeed(), "Nodes failed to scale or start untainted")
+		nodeCount := nodeCountUsed
 
 		var phases []PhaseStats
 
@@ -211,18 +164,18 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply Security Agent NodeReadinessRule manifest:\n%s", setupRuleCmdOutput)
 
 		By("Applying security-agent-stage-false stage rules to simulate unhealthy agent status")
-		falseStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "security-agent-stage-false.yaml")
-		applyFalseCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", falseStagePath) // #nosec G204
+		applyFalseCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+		applyFalseCmd.Stdin = strings.NewReader(securityAgentStageFalseManifest)
 		falseOutput, err := utils.Run(applyFalseCmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply false stage: %s", falseOutput)
 
 		By("Waiting for the controller manager to reconcile and add taints to all nodes")
 		Eventually(func(g Gomega) int {
-			count, err := countTaintedNodes(ctx, clientset)
+			count, err := countTaintedNodes(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
 			By(fmt.Sprintf("Progress: %d/%d nodes successfully tainted", count, nodeCount))
 			return count
-		}, "15m", "1s").Should(Equal(nodeCount), "Tainted nodes count did not reach target replicas")
+		}, "15m", "10s").Should(Equal(nodeCount), "Tainted nodes count did not reach target replicas")
 
 		taintEnd := time.Now()
 		taintDuration := taintEnd.Sub(taintStart)
@@ -242,21 +195,26 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		By("Applying security-agent-stage-true stage rules to simulate CNI/agent readiness")
 		untaintStart := time.Now()
 
-		trueStagePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "security-agent-stage-true.yaml")
-		applyTrueCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", trueStagePath) // #nosec G204
+		applyTrueCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+		applyTrueCmd.Stdin = strings.NewReader(securityAgentStageTrueManifest)
 		trueOutput, err := utils.Run(applyTrueCmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply true stage: %s", trueOutput)
 
-		By("Waiting for the controller manager to reconcile, remove taints, and write bootstrap annotations on all nodes")
+		By("Waiting for the controller manager to reconcile and remove taints on all nodes")
 		Eventually(func(g Gomega) {
-			tainted, err := countTaintedNodes(ctx, clientset)
+			tainted, err := countTaintedNodes(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
-			annotated, err := countAnnotatedNodes(ctx, clientset)
-			g.Expect(err).NotTo(HaveOccurred())
-			By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted, %d/%d nodes annotated", tainted, nodeCount, annotated, nodeCount))
 			g.Expect(tainted).To(Equal(0))
-			g.Expect(annotated).To(Equal(nodeCount))
-		}, "15m", "1s").Should(Succeed(), "Failed to complete untainting and annotation phase")
+
+			if strings.Contains(securityAgentRuleManifest, "bootstrap-only") {
+				annotated, err := countAnnotatedNodes(ctx)
+				g.Expect(err).NotTo(HaveOccurred())
+				By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted, %d/%d nodes annotated", tainted, nodeCount, annotated, nodeCount))
+				g.Expect(annotated).To(Equal(nodeCount))
+			} else {
+				By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted (continuous mode, skipping annotation check)", tainted, nodeCount))
+			}
+		}, "15m", "10s").Should(Succeed(), "Failed to complete untainting phase")
 
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
@@ -304,7 +262,7 @@ var _ = AfterSuite(func() {
 		Phases    []QueryResult
 	}{
 		NodeCount: nodeCountUsed,
-		Mode:      "bootstrap-only",
+		Mode:      "continuous",
 		Phases:    queryResults,
 	}
 
@@ -321,27 +279,55 @@ var _ = AfterSuite(func() {
 		return
 	}
 
-	// Stop the kwok cluster cleanly
-	By("Stopping the kwokctl cluster...")
-	stopCmd := exec.Command(kwokctlBinaryPath, "stop", "cluster", "--name", "kwok") // #nosec G204
-	stopOutput, err := utils.Run(stopCmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to stop kwok cluster:\n%s", stopOutput)
+	// Delete the kwok cluster cleanly
+	By("Deleting the kwokctl cluster...")
+	deleteCmd := exec.Command(kwokctlBinaryPath, "delete", "cluster", "--name", "kwok") // #nosec G204
+	deleteOutput, err := utils.Run(deleteCmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to delete kwok cluster:\n%s", deleteOutput)
 
 	// Wait dynamically for Prometheus to shut down completely by verifying the port is closed
 	Eventually(func(g Gomega) {
-		_, err := http.Get("http://127.0.0.1:9090/-/ready")
+		_, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/-/ready", prometheusPort))
 		g.Expect(err).To(HaveOccurred()) // connection refused - Prometheus is down!
 	}, "10s", "100ms").Should(Succeed(), "Prometheus failed to shut down")
 })
 
-func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "type=kwok"})
+type kwokNodeList struct {
+	Items []struct {
+		Metadata struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Spec struct {
+			Taints []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"taints"`
+		} `json:"spec"`
+	} `json:"items"`
+}
+
+func getKwokNodes(ctx context.Context) (*kwokNodeList, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-l", "type=kwok", "-o", "json")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var list kwokNodeList
+	if err := json.Unmarshal([]byte(output), &list); err != nil {
+		return nil, err
+	}
+	return &list, nil
+}
+
+func countTaintedNodes(ctx context.Context) (int, error) {
+	list, err := getKwokNodes(ctx)
 	if err != nil {
 		return 0, err
 	}
 
 	count := 0
-	for _, node := range nodes.Items {
+	for _, node := range list.Items {
 		for _, taint := range node.Spec.Taints {
 			if taint.Key == "readiness.k8s.io/SecurityAgentNotReady" && taint.Value == "pending" {
 				count++
@@ -352,15 +338,15 @@ func countTaintedNodes(ctx context.Context, clientset *kubernetes.Clientset) (in
 	return count, nil
 }
 
-func countAnnotatedNodes(ctx context.Context, clientset *kubernetes.Clientset) (int, error) {
-	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "type=kwok"})
+func countAnnotatedNodes(ctx context.Context) (int, error) {
+	list, err := getKwokNodes(ctx)
 	if err != nil {
 		return 0, err
 	}
 
 	count := 0
-	for _, node := range nodes.Items {
-		for k := range node.Annotations {
+	for _, node := range list.Items {
+		for k := range node.Metadata.Annotations {
 			if strings.HasPrefix(k, "readiness.k8s.io/bootstrap-completed-") {
 				count++
 				break
@@ -369,8 +355,6 @@ func countAnnotatedNodes(ctx context.Context, clientset *kubernetes.Clientset) (
 	}
 	return count, nil
 }
-
-
 
 func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -382,7 +366,7 @@ func doGetRequest(ctx context.Context, urlStr string) (*http.Response, error) {
 }
 
 func queryPrometheusInstant(ctx context.Context, query string) (string, error) {
-	urlStr := fmt.Sprintf("http://127.0.0.1:9090/api/v1/query?query=%s", url.QueryEscape(query))
+	urlStr := fmt.Sprintf("http://127.0.0.1:%s/api/v1/query?query=%s", prometheusPort, url.QueryEscape(query))
 	resp, err := doGetRequest(ctx, urlStr)
 	if err != nil {
 		return "", err
