@@ -43,18 +43,18 @@ func TestScale(t *testing.T) {
 }
 
 const (
-	kwokctlVersion        = "v0.8.0"
-	defaultNodeCount      = 1000
-	controllerMetricsPort = "8080"
-	prometheusPort        = "9090"
+	kwokctlVersion   = "v0.8.0"
+	defaultNodeCount = 1000
 )
 
 var (
-	kwokctlBinaryPath string
-	controllerBinPath string
-	controllerCmd     *exec.Cmd
-	controllerLogFile *os.File
-	artifactsDir      string
+	kwokctlBinaryPath     string
+	controllerBinPath     string
+	controllerCmd         *exec.Cmd
+	controllerLogFile     *os.File
+	artifactsDir          string
+	controllerMetricsPort = "8080"
+	prometheusPort        = "9090"
 )
 
 //go:embed testdata/security-agent-rule.yaml
@@ -70,6 +70,12 @@ var securityAgentStageTrueManifest string
 var prometheusJobTemplate string
 
 var _ = BeforeSuite(func() {
+	if port := os.Getenv("CONTROLLER_METRICS_PORT"); port != "" {
+		controllerMetricsPort = port
+	}
+	if port := os.Getenv("PROMETHEUS_PORT"); port != "" {
+		prometheusPort = port
+	}
 
 	By("Ensuring kwokctl binary is present")
 	projectRootDir, err := utils.GetProjectDir()
