@@ -77,10 +77,10 @@ var _ = Describe("Node Readiness Controller Scalability Test", func() {
 		taintEnd := time.Now()
 		taintDuration := taintEnd.Sub(taintStart)
 
-		// Delete KWOK'S false Stage resource to avoid conflicting stages
+		By("Deleting KWOK's Stage for condition false to avoid conflicting stages")
 		deleteFalseCmd := exec.CommandContext(ctx, "kubectl", "delete", "stage", "security-agent-stage-false", "--ignore-not-found") // #nosec G204
-		_, err = utils.Run(deleteFalseCmd)
-		Expect(err).NotTo(HaveOccurred())
+		deleteCmdOutput, err := utils.Run(deleteFalseCmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to delete the false condition Stage:\n%s", deleteCmdOutput)
 
 		phases = append(phases, phaseStats{
 			title: fmt.Sprintf("%d Nodes - Tainting (Add) Phase [Duration: %s]", nodeCount, taintDuration.Round(time.Millisecond)),
@@ -102,12 +102,12 @@ var _ = Describe("Node Readiness Controller Scalability Test", func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply true stage: %s", trueOutput)
 
 		By("Waiting for the controller manager to reconcile and remove taints on all nodes")
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega) int {
 			tainted, err := countTaintedNodes(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(tainted).To(Equal(0))
 			By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted", tainted, nodeCount))
-		}, "15m", "10s").Should(Succeed(), "Failed to complete untainting phase")
+			return tainted
+		}, "15m", "10s").Should(Equal(0), "Failed to complete untainting phase")
 
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
@@ -123,7 +123,7 @@ var _ = Describe("Node Readiness Controller Scalability Test", func() {
 
 		for _, phase := range phases {
 			reportStruct, err := collectAndReportMetricsForWindow(ctx, phase.title, phase.start, phase.end)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred(), "Failed to construct the report struct")
 			queryResults = append(queryResults, reportStruct)
 		}
 	})
