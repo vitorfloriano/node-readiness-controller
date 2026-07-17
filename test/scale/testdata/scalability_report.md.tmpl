@@ -25,6 +25,13 @@
     *   P50: {{index .Metrics "workqueue_work_duration_p50"}}
     *   P90: {{index .Metrics "workqueue_work_duration_p90"}}
     *   P99: {{index .Metrics "workqueue_work_duration_p99"}}
+*   **Workqueue Retries**:
+    *   Node Controller: {{index .Metrics "workqueue_retries_node"}}
+    *   Rule Controller: {{index .Metrics "workqueue_retries_rules"}}
+*   **Workqueue Adds**:
+    *   Node Controller: {{index .Metrics "workqueue_adds_node"}}
+    *   Rule Controller: {{index .Metrics "workqueue_adds_rules"}}
+
 
 ### Node Readiness Custom Counts
 *   **Taint Operations**:
@@ -34,8 +41,12 @@
 *   **Controller Operational Failures**: {{index .Metrics "operational_failures_total"}}
 
 ### System Resources
-*   **CPU Rate (Average Cores)**: {{index .Metrics "cpu_cores_rate"}}
-*   **Resident Memory Peak**: {{index .Metrics "resident_memory_peak"}}
+*   **CPU Usage (Cores)**:
+    *   Average: {{index .Metrics "cpu_cores_rate"}}
+    *   Peak (5s window): {{index .Metrics "cpu_cores_peak"}}
+*   **Resident Memory**:
+    *   Average: {{index .Metrics "resident_memory_avg"}}
+    *   Peak: {{index .Metrics "resident_memory_peak"}}
 
 ---
 {{end}}
