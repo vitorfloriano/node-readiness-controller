@@ -85,13 +85,13 @@ var _ = BeforeSuite(func() {
 	By("Cleaning up any existing simulated cluster and stale controller processes")
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
-	// Clean up any stale controller processes running on the host
 	if runtime.GOOS == "windows" {
 		_ = exec.Command("taskkill", "/IM", "node-readiness-controller.exe", "/F").Run()
 	} else {
 		_ = exec.Command("pkill", "-f", "node-readiness-controller").Run()
 	}
 
+	By("Creating the simulated KWOK cluster")
 	createArgs := []string{
 		"create", "cluster",
 		"--runtime", "binary",
@@ -109,11 +109,13 @@ var _ = BeforeSuite(func() {
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
 
+	By("Configuring KUBECONFIG environment variable to target the simulated cluster")
 	homeDir, err := os.UserHomeDir()
 	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve user home directory")
 
-	kwokKubeconfig := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "kubeconfig.yaml")
-	_ = os.Setenv("KUBECONFIG", kwokKubeconfig)
+	kubeconfig := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "kubeconfig.yaml")
+	err = os.Setenv("KUBECONFIG", kubeconfig)
+	Expect(err).NotTo(HaveOccurred(), "Failed to set KUBECONFIG environment variable")
 
 	By("Applying NodeReadinessRule CRD manifests")
 	crdConfigPath := filepath.Join(projectRootDir, "config", "crd")
@@ -137,13 +139,15 @@ var _ = BeforeSuite(func() {
 	prometheusConfigPath := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "prometheus.yaml")
 
 	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath) // #nosec G304
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to read Prometheus configuration")
 
 	newConfig := string(prometheusConfigBytes) + fmt.Sprintf(prometheusJobTemplate, controllerMetricsPort)
 	err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0600)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to update Prometheus configuration with new job")
 
-	_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
+	By("Restarting Prometheus to load updated configuration")
+	err = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
+	Expect(err).NotTo(HaveOccurred(), "Failed to restart Prometheus instance to load updated configuration")
 
 	By("Waiting for Prometheus endpoint to be ready")
 	// Verify Prometheus readiness explicitly before proceeding
@@ -174,23 +178,16 @@ var _ = BeforeSuite(func() {
 		g.Expect(len(list.Items)).To(Equal(nodeCount))
 	}, "15m", "10s").Should(Succeed(), "Nodes failed to scale")
 
-	// Resolve kubeconfig path
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		home, err := os.UserHomeDir()
-		Expect(err).NotTo(HaveOccurred(), "Failed to get user home directory")
-		kubeconfig = filepath.Join(home, ".kube", "config")
-	}
-
+	By("Creating subdirectory for storing test artifacts")
 	artifactsDir = os.Getenv("ARTIFACTS")
 	if artifactsDir == "" {
 		artifactsDir = filepath.Join(projectRootDir, "test", "scale", "artifacts")
 	}
 
 	err = os.MkdirAll(artifactsDir, 0750)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to create the artifacts subdirectory")
 
-	// Create file for the controller logs directly in the artifacts directory
+	By("Creating file for storing the controller logs")
 	var errError error
 	controllerLogFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log")) // #nosec G304
 	Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
@@ -227,7 +224,6 @@ var _ = BeforeSuite(func() {
 	err = controllerCmd.Start()
 	Expect(err).NotTo(HaveOccurred(), "Failed to start controller process")
 
-	// Wait for the controller metrics to be ready
 	By("Waiting for the controller metrics endpoint to be responsive")
 	Eventually(func(g Gomega) {
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/metrics", controllerMetricsPort))
@@ -243,7 +239,7 @@ var _ = AfterSuite(func() {
 	By("Writing Markdown scalability report")
 	templatePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "scalability_report.md.tmpl")
 	tmpl, err := template.ParseFiles(templatePath)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to parse scalability report template")
 
 	reportData := struct {
 		NodeCount int
@@ -257,11 +253,11 @@ var _ = AfterSuite(func() {
 
 	reportPath := filepath.Join(artifactsDir, "scalability_report.md")
 	reportFile, err := os.OpenFile(reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to open the file created for the scalability report")
 	defer func() { _ = reportFile.Close() }()
 
 	err = tmpl.Execute(reportFile, reportData)
-	Expect(err).NotTo(HaveOccurred())
+	Expect(err).NotTo(HaveOccurred(), "Failed to template report data onto report file")
 
 	if os.Getenv("SKIP_TEARDOWN") == "true" {
 		By("Skipping teardown. Controller background process, KWOK cluster and Prometheus kept alive.")
