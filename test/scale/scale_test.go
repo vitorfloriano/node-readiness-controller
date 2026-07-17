@@ -41,7 +41,7 @@ var (
 	nodeCountUsed int
 )
 
-var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
+var _ = Describe("Node Readiness Controller Scalability Test", func() {
 
 	It("should successfully run the scale test phases and evaluate performance", func() {
 		queryResults = nil
@@ -51,15 +51,16 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		var phases []phaseStats
 
 		// Tainting Phase
-		taintStart := time.Now()
 
 		By("Applying Security Agent NodeReadinessRule resource")
+		taintStart := time.Now()
+
 		setupRuleCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 		setupRuleCmd.Stdin = strings.NewReader(securityAgentRuleManifest)
 		setupRuleCmdOutput, err := utils.Run(setupRuleCmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply Security Agent NodeReadinessRule manifest:\n%s", setupRuleCmdOutput)
 
-		By("Applying security-agent-stage-false stage rules to simulate unhealthy agent status")
+		By("Applying KWOK's Stage to simulate condition false")
 		applyFalseCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 		applyFalseCmd.Stdin = strings.NewReader(securityAgentStageFalseManifest)
 		falseOutput, err := utils.Run(applyFalseCmd)
@@ -76,7 +77,7 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 		taintEnd := time.Now()
 		taintDuration := taintEnd.Sub(taintStart)
 
-		// Clean up the False stage
+		// Delete KWOK'S false Stage resource to avoid conflicting stages
 		deleteFalseCmd := exec.CommandContext(ctx, "kubectl", "delete", "stage", "security-agent-stage-false", "--ignore-not-found") // #nosec G204
 		_, err = utils.Run(deleteFalseCmd)
 		Expect(err).NotTo(HaveOccurred())
@@ -87,8 +88,12 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			end:   taintEnd,
 		})
 
-		// Untainting / Annotation Phase
-		By("Applying security-agent-stage-true stage rules to simulate CNI/agent readiness")
+		By("Sleeping 10 seconds to settle metrics before starting untainting")
+		time.Sleep(10 * time.Second)
+
+		// Untainting Phase
+
+		By("Applying KWOK's Stage to simulate condition true (agent ready)")
 		untaintStart := time.Now()
 
 		applyTrueCmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
@@ -112,6 +117,9 @@ var _ = Describe("Node Readiness Controller Scale Performance Test", func() {
 			start: untaintStart,
 			end:   untaintEnd,
 		})
+
+		By("Sleeping 10 seconds to settle metrics before gathering final report")
+		time.Sleep(10 * time.Second)
 
 		for _, phase := range phases {
 			reportStruct, err := collectAndReportMetricsForWindow(ctx, phase.title, phase.start, phase.end)
