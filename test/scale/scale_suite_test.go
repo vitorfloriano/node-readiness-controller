@@ -109,13 +109,7 @@ var _ = BeforeSuite(func() {
 	createOuput, err := utils.Run(createCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create kwok cluster:\n%s", createOuput)
 
-	By("Configuring KUBECONFIG environment variable to target the simulated cluster")
-	homeDir, err := os.UserHomeDir()
-	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve user home directory")
 
-	kubeconfig := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "kubeconfig.yaml")
-	err = os.Setenv("KUBECONFIG", kubeconfig)
-	Expect(err).NotTo(HaveOccurred(), "Failed to set KUBECONFIG environment variable")
 
 	By("Applying NodeReadinessRule CRD manifests")
 	crdConfigPath := filepath.Join(projectRootDir, "config", "crd")
@@ -136,6 +130,8 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to compile controller manager:\n%s", buildOutput)
 
 	By("Configuring controller scraper job in Prometheus config")
+	homeDir, err := os.UserHomeDir()
+	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve user home directory")
 	prometheusConfigPath := filepath.Join(homeDir, ".kwok", "clusters", "kwok", "prometheus.yaml")
 
 	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath) // #nosec G304
@@ -217,7 +213,6 @@ var _ = BeforeSuite(func() {
 	} else {
 		controllerCmd = exec.Command(controllerBinPath, args...)
 	}
-	controllerCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 	controllerCmd.Stdout = controllerLogFile
 	controllerCmd.Stderr = controllerLogFile
 
