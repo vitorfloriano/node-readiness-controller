@@ -12,8 +12,8 @@ During execution, the scale suite performs the following lifecycle:
 3. **Controller Startup**: Compiles the latest manager binary and starts it in the background targeting the KWOK cluster API server.
 4. **Scraper Registry**: Registers a metrics scraper targeting the controller's `/metrics` endpoint and spins up a local Prometheus scraper instance on the configured port with a `1s` scrape interval.
 5. **Phase Execution**:
-    *   **Tainting (Add) Phase**: Registers the `NodeReadinessRule` and triggers CNI/agent status transitions to `false`, measuring how fast the controller applies taints across all nodes.
-    *   **Untainting Phase**: Simulates CNI/agent status transitions to `true` (ready), measuring how fast the controller removes taints across all nodes.
+    *   **Tainting (Add) Phase**: Registers the `NodeReadinessRule` and triggers status transitions to `false`, measuring how fast the controller applies taints across all nodes.
+    *   **Untainting Phase**: Simulates status transitions to `true` (ready), measuring how fast the controller removes taints across all nodes.
 6. **Telemetry Report**: Queries the active Prometheus instance (calculating reconcile latencies, workqueue durations, custom node readiness counters, CPU rates, and memory peaks) and writes the results to the artifacts directory using Go's `text/template` engine.
 7. **Clean Teardown**: Gracefully deletes the KWOK cluster, stops Prometheus, and cleans up the controller manager process (unless `SKIP_TEARDOWN=true` is set).
 
