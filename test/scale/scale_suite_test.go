@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"testing"
 	"text/template"
 
@@ -140,20 +139,11 @@ var _ = BeforeSuite(func() {
 	prometheusConfigBytes, err := os.ReadFile(prometheusConfigPath) // #nosec G304
 	Expect(err).NotTo(HaveOccurred())
 
-	newConfig := string(prometheusConfigBytes)
-	modified := false
-	if !strings.Contains(newConfig, "node-readiness-controller") {
-		extraJobYAML := fmt.Sprintf(prometheusJobTemplate, controllerMetricsPort)
-		newConfig += extraJobYAML
-		modified = true
-	}
+	newConfig := string(prometheusConfigBytes) + fmt.Sprintf(prometheusJobTemplate, controllerMetricsPort)
+	err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0600)
+	Expect(err).NotTo(HaveOccurred())
 
-	if modified {
-		err = os.WriteFile(prometheusConfigPath, []byte(newConfig), 0600)
-		Expect(err).NotTo(HaveOccurred())
-
-		_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
-	}
+	_ = exec.Command("pkill", "-SIGHUP", "prometheus").Run()
 
 	By("Waiting for Prometheus endpoint to be ready")
 	// Verify Prometheus readiness explicitly before proceeding
