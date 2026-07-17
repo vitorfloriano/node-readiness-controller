@@ -26,26 +26,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"sigs.k8s.io/node-readiness-controller/test/utils"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
-type kwokNodeList struct {
-	Items []struct {
-		Spec struct {
-			Taints []struct {
-				Key   string `json:"key"`
-				Value string `json:"value"`
-			} `json:"taints"`
-		} `json:"spec"`
-	} `json:"items"`
-}
+var clientset *kubernetes.Clientset
 
 type prometheusResponse struct {
 	Status string `json:"status"`
@@ -106,28 +98,65 @@ func ensureKwokctl(version string, targetDir string) string {
 	return localBinaryPath
 }
 
-func getKwokNodes(ctx context.Context) (*kwokNodeList, error) {
-	cmd := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-l", "type=kwok", "-o", "json")
-	output, err := utils.Run(cmd)
+func getKubeClient() (*kubernetes.Clientset, error) {
+	if clientset != nil {
+		return clientset, nil
+	}
+
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		kubeconfig = filepath.Join(home, ".kube", "config")
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, err
 	}
 
-	var list kwokNodeList
-	if err := json.Unmarshal([]byte(output), &list); err != nil {
+	cs, err := kubernetes.NewForConfig(config)
+	if err != nil {
 		return nil, err
 	}
-	return &list, nil
+
+	clientset = cs
+	return clientset, nil
+}
+
+func countKwokNodes(ctx context.Context) (int, error) {
+	client, err := getKubeClient()
+	if err != nil {
+		return 0, err
+	}
+
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: "type=kwok",
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return len(nodes.Items), nil
 }
 
 func countTaintedNodes(ctx context.Context) (int, error) {
-	list, err := getKwokNodes(ctx)
+	client, err := getKubeClient()
+	if err != nil {
+		return 0, err
+	}
+
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: "type=kwok",
+	})
 	if err != nil {
 		return 0, err
 	}
 
 	count := 0
-	for _, node := range list.Items {
+	for _, node := range nodes.Items {
 		for _, taint := range node.Spec.Taints {
 			if taint.Key == "readiness.k8s.io/SecurityAgentNotReady" && taint.Value == "pending" {
 				count++

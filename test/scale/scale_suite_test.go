@@ -168,11 +168,11 @@ var _ = BeforeSuite(func() {
 	scaleOutput, err := utils.Run(scaleCmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to scale nodes: %s", scaleOutput)
 
-	Eventually(func(g Gomega) {
-		list, err := getKwokNodes(context.Background())
+	Eventually(func(g Gomega) int {
+		count, err := countKwokNodes(context.Background())
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(len(list.Items)).To(Equal(nodeCount))
-	}, "15m", "10s").Should(Succeed(), "Nodes failed to scale")
+		return count
+	}, "15m", "1s").Should(Equal(nodeCount), "Nodes failed to scale")
 
 	By("Creating subdirectory for storing test artifacts")
 	artifactsDir = os.Getenv("ARTIFACTS")

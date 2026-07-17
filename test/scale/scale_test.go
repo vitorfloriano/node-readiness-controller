@@ -72,7 +72,7 @@ var _ = Describe("Node Readiness Controller Scalability Test", func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			By(fmt.Sprintf("Progress: %d/%d nodes successfully tainted", count, nodeCount))
 			return count
-		}, "15m", "10s").Should(Equal(nodeCount), "Tainted nodes count did not reach target replicas")
+		}, "15m", "1s").Should(Equal(nodeCount), "Tainted nodes count did not reach target replicas")
 
 		taintEnd := time.Now()
 		taintDuration := taintEnd.Sub(taintStart)
@@ -107,7 +107,7 @@ var _ = Describe("Node Readiness Controller Scalability Test", func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			By(fmt.Sprintf("Progress: %d/%d nodes remaining tainted", tainted, nodeCount))
 			return tainted
-		}, "15m", "10s").Should(Equal(0), "Failed to complete untainting phase")
+		}, "15m", "1s").Should(Equal(0), "Failed to complete untainting phase")
 
 		untaintEnd := time.Now()
 		untaintDuration := untaintEnd.Sub(untaintStart)
