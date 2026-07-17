@@ -37,8 +37,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-var clientset *kubernetes.Clientset
-
 type prometheusResponse struct {
 	Status string `json:"status"`
 	Data   struct {
@@ -55,7 +53,12 @@ type queryResult struct {
 	Metrics         map[string]string `json:"metrics"`
 }
 
-var promHTTPClient = &http.Client{Timeout: 5 * time.Second}
+var (
+	// We are using client-go over kubectl to increase the polling frequency
+	clientset *kubernetes.Clientset
+	// We need an HTTP client to query Prometheus endpoint
+	promHTTPClient = &http.Client{Timeout: 5 * time.Second}
+)
 
 func ensureKwokctl(version string, targetDir string) string {
 	goOS := runtime.GOOS
