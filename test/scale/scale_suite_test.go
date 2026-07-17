@@ -84,7 +84,6 @@ var _ = BeforeSuite(func() {
 	kwokctlBinaryPath = ensureKwokctl(kwokctlVersion, toolsBinDir)
 
 	By("Cleaning up any existing simulated cluster and stale controller processes")
-	// Clean up any existing cluster first to ensure we start fresh
 	_ = exec.Command(kwokctlBinaryPath, "delete", "cluster").Run()
 
 	// Clean up any stale controller processes running on the host
@@ -157,7 +156,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("Waiting for Prometheus endpoint to be ready")
-	// Verify Prometheus readiness explicitly before proceeding (Item 6)
+	// Verify Prometheus readiness explicitly before proceeding
 	Eventually(func(g Gomega) {
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/-/ready", prometheusPort))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -201,12 +200,11 @@ var _ = BeforeSuite(func() {
 	err = os.MkdirAll(artifactsDir, 0750)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Create log file for the controller directly in the artifacts directory
+	// Create file for the controller logs directly in the artifacts directory
 	var errError error
 	controllerLogFile, errError = os.Create(filepath.Join(artifactsDir, "controller.log")) // #nosec G304
 	Expect(errError).NotTo(HaveOccurred(), "Failed to create controller.log")
 
-	// Start the controller manager process
 	By("Starting the node-readiness-controller manager daemon process")
 	args := []string{
 		fmt.Sprintf("--metrics-bind-address=:%s", controllerMetricsPort),
@@ -252,8 +250,7 @@ var _ = AfterSuite(func() {
 	projectRootDir, err := utils.GetProjectDir()
 	Expect(err).NotTo(HaveOccurred())
 
-	// Generate and write Markdown Performance Report
-	By("Writing Markdown performance report")
+	By("Writing Markdown scalability report")
 	templatePath := filepath.Join(projectRootDir, "test", "scale", "testdata", "scalability_report.md.tmpl")
 	tmpl, err := template.ParseFiles(templatePath)
 	Expect(err).NotTo(HaveOccurred())
@@ -277,11 +274,10 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	if os.Getenv("SKIP_TEARDOWN") == "true" {
-		By("Skipping teardown. Controller background process, KWOK cluster and Prometheus tsdb kept alive.")
+		By("Skipping teardown. Controller background process, KWOK cluster and Prometheus kept alive.")
 		return
 	}
 
-	// Terminate the background controller process
 	By("Terminating the background controller process")
 	if controllerCmd != nil && controllerCmd.Process != nil {
 		_ = controllerCmd.Process.Kill()
@@ -291,7 +287,6 @@ var _ = AfterSuite(func() {
 		_ = controllerLogFile.Close()
 	}
 
-	// Delete the kwok cluster cleanly
 	By("Deleting the kwokctl cluster...")
 	deleteCmd := exec.Command(kwokctlBinaryPath, "delete", "cluster", "--name", "kwok") // #nosec G204
 	deleteOutput, err := utils.Run(deleteCmd)
