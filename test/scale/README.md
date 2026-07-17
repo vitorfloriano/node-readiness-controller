@@ -72,7 +72,7 @@ Upon a successful test run, only two output files are populated in the configure
 
 ## Further Exploration
 
-By using `SKIP_TEARDOWN=true`, it is possible to access Prometheus's Web Dashboard at localhost:9090 (or specified port) and query the database using PromQL.
+By using `SKIP_TEARDOWN=true`, it is possible to access Prometheus's Web Dashboard at `localhost:9090` (or specified port) and query the database using PromQL.
 
 > [!IMPORTANT]
 > Skipping teardown requires deleting the KWOK cluster and finishing the controller process manually.
