@@ -29,7 +29,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -63,6 +62,8 @@ type queryResult struct {
 	DurationSeconds float64           `json:"duration_seconds"`
 	Metrics         map[string]string `json:"metrics"`
 }
+
+var promHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 func ensureKwokctl(version string, targetDir string) string {
 	goOS := runtime.GOOS
@@ -138,14 +139,16 @@ func countTaintedNodes(ctx context.Context) (int, error) {
 }
 
 func queryPrometheusInstant(ctx context.Context, query string, ts float64) (string, error) {
+	// Construct the Prometheus Instant Query HTTP endpoint.
+	// Query parameters are URL-escaped, and the evaluation timestamp float is formatted to 3 decimal places.
 	urlStr := fmt.Sprintf("http://127.0.0.1:%s/api/v1/query?query=%s&time=%.3f", prometheusPort, url.QueryEscape(query), ts)
 
-	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := client.Do(req)
+
+	resp, err := promHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -165,6 +168,10 @@ func queryPrometheusInstant(ctx context.Context, query string, ts float64) (stri
 		return "", fmt.Errorf("prometheus query failed: %s", promResp.Status)
 	}
 
+	// Prometheus instant query response format:
+	// "result": [{"metric": {}, "value": [ <timestamp_float>, "<value_string>" ]}]
+	// We verify that we received at least one time-series result, and that the value array
+	// has at least two elements (timestamp at index 0, metric value string at index 1).
 	if len(promResp.Data.Result) == 0 || len(promResp.Data.Result[0].Value) < 2 {
 		return "", fmt.Errorf("no data returned")
 	}
@@ -177,34 +184,53 @@ func queryPrometheusInstant(ctx context.Context, query string, ts float64) (stri
 }
 
 func collectAndReportMetricsForWindow(ctx context.Context, phaseTitle string, phaseStart time.Time, phaseEnd time.Time) (queryResult, error) {
-	// Sleep 2 seconds to ensure Prometheus scrapes the final data points
-	time.Sleep(2 * time.Second)
+	// Add a 5-second offset to the query time. Prometheus scrapes metrics asynchronously,
+	// so querying exactly at phaseEnd might miss metrics events that occurred in the last second
+	// of the phase because they haven't been scraped and written to the database yet.
+	queryTime := phaseEnd.Add(5 * time.Second)
 
-	queryTime := phaseEnd.Add(2 * time.Second)
+	// Calculate the range duration (in seconds) from the start of the phase up to our
+	// offset query time. This is used as the range vector window (e.g. [45s]) for gauges and rates.
 	lookbackSecs := int(queryTime.Sub(phaseStart).Seconds())
-	if lookbackSecs < 10 {
-		lookbackSecs = 10
-	}
+
+	// Convert the offset query timestamp into a float64 Unix epoch (seconds with sub-second precision).
+	// The Prometheus API expects the query evaluation time parameter to be formatted as a float.
 	ts := float64(queryTime.UnixNano()) / 1e9
 
 	metricsMap := make(map[string]string)
 
 	for _, q := range metricQueries {
-		if q.PhaseFilter != "" && !strings.Contains(phaseTitle, q.PhaseFilter) {
-			continue
-		}
+		var val string
+		var err error
 
-		queryStr := fmt.Sprintf(q.QueryTmpl, lookbackSecs)
-		val, err := queryPrometheusInstant(ctx, queryStr, ts)
-		if err != nil {
-			if q.IsCounter {
+		if q.IsCounter {
+			// For counters, we calculate the exact delta increase over the phase.
+			// We format the phase start time as a float Unix timestamp and inject it
+			// into the PromQL query template using the '@' modifier.
+			tsStart := float64(phaseStart.UnixNano()) / 1e9
+			queryStr := fmt.Sprintf(q.QueryTmpl, tsStart)
+
+			// Execute the instant query at the end-of-phase timestamp (ts).
+			// This returns: Value(end) - (Value(start) or 0).
+			val, err = queryPrometheusInstant(ctx, queryStr, ts)
+			if err != nil {
 				metricsMap[q.Key] = "0 " + q.Unit
-			} else {
-				metricsMap[q.Key] = "N/A"
+				continue
 			}
-			continue
+		} else {
+			// For non-counter metrics (gauges and histograms), we evaluate them over the
+			// sliding range window defined by lookbackSecs (e.g., avg_over_time(metric[45s])).
+			queryStr := fmt.Sprintf(q.QueryTmpl, lookbackSecs)
+
+			// Query the statistic evaluated at the end-of-phase timestamp (ts).
+			val, err = queryPrometheusInstant(ctx, queryStr, ts)
+			if err != nil {
+				metricsMap[q.Key] = "N/A"
+				continue
+			}
 		}
 
+		// Append the display unit (e.g., "s", "ops", "cores") to the formatted string.
 		if q.Unit != "" {
 			metricsMap[q.Key] = val + " " + q.Unit
 		} else {
